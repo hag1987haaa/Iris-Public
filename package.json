@@ -20,6 +20,7 @@
             "Theme",
             "AnimSpeed",
             "AnimFreq",
+            "AnimMode",
             "VibeMode",
             "ShutterThickness",
             "BatteryColorSync",

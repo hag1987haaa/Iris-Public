@@ -96,7 +96,7 @@ module.exports = [
   },
 
   // ==========================================
-  // 2. 動きと音 (Animation & Alerts)
+  // 2. 動きと振動 (Animation & Vibration)
   // ==========================================
   {
     "type": "section",
@@ -104,6 +104,29 @@ module.exports = [
       {
         "type": "heading",
         "defaultValue": "Animation & Vibration"
+      },
+      {
+        "type": "select",
+        "messageKey": "AnimMode",
+        "label": "Animation Mode",
+        "description": "Choose when aperture animation plays.",
+        "defaultValue": "0",
+        "options": [
+          { "label": "Full (Shake & Timer)", "value": "0" },
+          { "label": "Interval Timer Only", "value": "1" },
+          { "label": "Shake Only", "value": "2" },
+          { "label": "Disabled (Off)", "value": "3" }
+        ]
+      },
+      {
+        "type": "slider",
+        "messageKey": "AnimFreq",
+        "label": "Auto-Animation Interval (Minutes)",
+        "description": "Periodic animation frequency. Set to 0 to disable.",
+        "defaultValue": 1,
+        "min": 0,
+        "max": 60,
+        "step": 1
       },
       {
         "type": "slider",
@@ -115,20 +138,27 @@ module.exports = [
         "step": 10
       },
       {
-        "type": "slider",
-        "messageKey": "AnimFreq",
-        "label": "Auto-Animation Interval (Minutes)",
-        "description": "Set to 0 to disable automatic animations.",
-        "defaultValue": 1,
-        "min": 0,
-        "max": 60,
-        "step": 1
+        "type": "text",
+        "defaultValue": "<b>Periodic Vibration & Haptics</b>"
+      },
+      {
+        "type": "select",
+        "messageKey": "VibeMode",
+        "label": "Vibration Mode",
+        "description": "Vibrations are paused during Quiet Time so you won't be disturbed.",
+        "defaultValue": "2",
+        "options": [
+          { "label": "Shake & Periodic Vibration", "value": "0" },
+          { "label": "Periodic Vibration Only", "value": "1" },
+          { "label": "Shake Only", "value": "2" },
+          { "label": "Disabled", "value": "3" }
+        ]
       },
       {
         "type": "select",
         "messageKey": "ChimeInterval",
         "label": "Periodic Vibration Interval",
-        "description": "Set the interval for periodic vibration alerts.",
+        "description": "How often the watch gently vibrates.",
         "defaultValue": "60",
         "options": [
           { "label": "Every 5 Minutes", "value": "5" },
@@ -137,19 +167,6 @@ module.exports = [
           { "label": "Every 20 Minutes", "value": "20" },
           { "label": "Every 30 Minutes", "value": "30" },
           { "label": "Every 1 Hour", "value": "60" }
-        ]
-      },
-      {
-        "type": "select",
-        "messageKey": "VibeMode",
-        "label": "Vibration Mode",
-				"description": "Vibrations are paused during Quiet Time so you won't be disturbed.",
-        "defaultValue": "2",
-        "options": [
-          { "label": "Shake & Periodic Vibration", "value": "0" },
-          { "label": "Periodic Vibration Only", "value": "1" },
-          { "label": "Shake Only", "value": "2" },
-          { "label": "Disabled", "value": "3" }
         ]
       }
     ]
@@ -262,8 +279,8 @@ module.exports = [
         "label": "Business Vibration Mode",
         "defaultValue": "1",
         "options": [
-          { "label": "Shake & Periodic Chime", "value": "0" },
-          { "label": "Periodic Chime Only", "value": "1" },
+          { "label": "Shake & Periodic Vibration", "value": "0" },
+          { "label": "Periodic Vibration Only", "value": "1" },
           { "label": "Shake Only", "value": "2" },
           { "label": "Disabled", "value": "3" }
         ]

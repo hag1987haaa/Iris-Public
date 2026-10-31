@@ -4,7 +4,7 @@
 typedef enum { WeatherClear, WeatherCloudy, WeatherRainy, WeatherSnowy, WeatherThunder } WeatherStatus;
 
 typedef struct { 
-  int watchface_mode; int theme; int anim_speed; int anim_freq; int vibe_mode; int shutter_thick; 
+  int watchface_mode; int theme; int anim_speed; int anim_freq; int anim_mode; int vibe_mode; int shutter_thick; 
   bool battery_color_sync; int shutter_color_mode; GColor custom_shutter_color; 
   WeatherStatus weather; WeatherStatus tomorrow_weather; 
   bool enable_business; int biz_start_h; int biz_end_h; 
@@ -24,6 +24,14 @@ static bool s_pending_biz_update = false;
 static bool s_in_focus = true;  // 今画面がちゃんと見えているか？
 //最後に時報が鳴った時間を記憶する変数！
 static time_t s_last_chime_time = 0;
+// 定期バイブ（インターバルチャイム）直後のモーター振動ノイズによるタップ誤検知フラグ
+static bool s_block_tap_from_vibe = false;
+static AppTimer *s_unblock_tap_timer = NULL;
+
+static void unblock_tap_cb(void *data) {
+  s_block_tap_from_vibe = false;
+  s_unblock_tap_timer = NULL;
+}
 
 static Window *s_main_window;
 static Layer *s_canvas_layer;
@@ -65,9 +73,9 @@ static void apply_theme_colors() {
 
 static void load_settings() {
   #if defined(PBL_COLOR)
-    s_settings = (ClaySettings){0, 0, 40, 1, 2, 1, true, 4, GColorCyan, WeatherCloudy, WeatherClear, false, 9, 18, 1, 0, 0, 60, 1, 60, 1};
+    s_settings = (ClaySettings){0, 0, 40, 1, 0, 2, 1, true, 4, GColorCyan, WeatherCloudy, WeatherClear, false, 9, 18, 1, 0, 0, 60, 1, 60, 1};
   #else
-    s_settings = (ClaySettings){0, 0, 40, 1, 2, 1, true, 0, GColorCyan, WeatherCloudy, WeatherClear, false, 9, 18, 1, 0, 0, 60, 1, 60, 1};
+    s_settings = (ClaySettings){0, 0, 40, 1, 0, 2, 1, true, 0, GColorCyan, WeatherCloudy, WeatherClear, false, 9, 18, 1, 0, 0, 60, 1, 60, 1};
   #endif
   
   if(persist_exists(1)) persist_read_data(1, &s_settings, sizeof(s_settings));
@@ -102,6 +110,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
       dict_write_int32(out_iter, MESSAGE_KEY_Theme, s_settings.theme);
       dict_write_int32(out_iter, MESSAGE_KEY_AnimSpeed, s_settings.anim_speed);
       dict_write_int32(out_iter, MESSAGE_KEY_AnimFreq, s_settings.anim_freq);
+      dict_write_int32(out_iter, MESSAGE_KEY_AnimMode, s_settings.anim_mode);
       dict_write_int32(out_iter, MESSAGE_KEY_VibeMode, s_settings.vibe_mode);
       dict_write_int32(out_iter, MESSAGE_KEY_ShutterThickness, s_settings.shutter_thick);
       dict_write_int32(out_iter, MESSAGE_KEY_BatteryColorSync, s_settings.battery_color_sync ? 1 : 0);
@@ -137,6 +146,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   if((t=dict_find(iter, MESSAGE_KEY_Theme))) s_pending_settings.theme = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_AnimSpeed))) s_pending_settings.anim_speed = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_AnimFreq))) s_pending_settings.anim_freq = get_dict_int(t);
+  if((t=dict_find(iter, MESSAGE_KEY_AnimMode))) s_pending_settings.anim_mode = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_VibeMode))) s_pending_settings.vibe_mode = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_ShutterThickness))) s_pending_settings.shutter_thick = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_BatteryColorSync))) s_pending_settings.battery_color_sync = get_dict_int(t) == 1;
@@ -257,14 +267,27 @@ static void next_frame_handler(void *data) {
     }
   }
   
-  if (old < 0.9f && s_progress >= 0.9f && s_vibrate_on_close) vibes_short_pulse(); 
-  if (s_progress >= 2.0f) { s_progress = 0.0f; s_is_animating = false; }
+  if (old < 0.9f && s_progress >= 0.9f && s_vibrate_on_close) {
+    vibes_short_pulse();
+  } 
+  if (s_progress >= 2.0f) { s_progress = 0.0f; s_is_animating = false; s_vibrate_on_close = false; }
   else { app_timer_register(FRAME_RATE_MS, next_frame_handler, NULL); }
   layer_mark_dirty(s_canvas_layer);
 }
 
 static void trigger_shutter_internal(bool manual) {
   if (s_is_animating) return;
+
+  // アニメーションモード判定（ビジネスモード切り替え時は強制的にアニメーション許可）
+  if (!s_pending_biz_update && !s_has_pending_settings) {
+    // 3: Disabled (一切アニメーションしない)
+    if (s_settings.anim_mode == 3) return;
+    // 1: Interval Only (手首シェイクでは動かさない)
+    if (manual && s_settings.anim_mode == 1) return;
+    // 2: Shake Only (タイマー等の自動では動かさない)
+    if (!manual && s_settings.anim_mode == 2) return;
+  }
+
   s_is_animating = true; s_progress = 0.0;
   
   //手首シェイク時のバイブ制御（スリープモードなら絶対鳴らさない！）
@@ -281,6 +304,9 @@ static void handle_tap(AccelAxisType axis, int32_t direction) {
   //ビジネスモード中はシェイクを完全に無視！真面目な時計に徹する！
   if (s_active_biz_mode) return;
   
+  // 定期バイブ（インターバルチャイム）のモーター振動ノイズならブロック
+  if (s_block_tap_from_vibe) return;
+
   trigger_shutter_internal(true);
 }
 
@@ -334,6 +360,12 @@ if (is_chime_time && !is_sleep_mode) {
       if (current_vibe_mode == 0 || current_vibe_mode == 1) {
         vibes_short_pulse();
         s_last_chime_time = time(NULL); // 💡 ここで時間をメモ！
+        // モーター振動の誤検知だけをピンポイントで防ぐ（700msだけタップをブロック）
+        s_block_tap_from_vibe = true;
+        if (s_unblock_tap_timer) {
+          app_timer_cancel(s_unblock_tap_timer);
+        }
+        s_unblock_tap_timer = app_timer_register(700, unblock_tap_cb, NULL);
       }
     }
   }
@@ -342,9 +374,25 @@ if (is_chime_time && !is_sleep_mode) {
   if (s_pending_biz_update) {
     if (s_in_focus) trigger_shutter_internal(false); //見えてる時だけ！
     else update_info(); // 見えない時は裏で時間だけ進めて「おあずけ」！
-  } else if (!s_active_biz_mode && s_settings.anim_freq > 0 && tick->tm_min % s_settings.anim_freq == 0) {
-    if (s_in_focus) trigger_shutter_internal(false); //見えてる時だけ！
-    else update_info(); 
+  } else if (!s_active_biz_mode) {
+    bool should_animate = false;
+
+    // モード0 (Full): anim_freq間隔、またはインターバルチャイム時
+    if (s_settings.anim_mode == 0) {
+      if ((s_settings.anim_freq > 0 && tick->tm_min % s_settings.anim_freq == 0) || is_chime_time) {
+        should_animate = true;
+      }
+    }
+    // モード1 (Interval Only): インターバルタイマー時のみアニメーション
+    else if (s_settings.anim_mode == 1 && is_chime_time) {
+      should_animate = true;
+    }
+
+    if (should_animate && s_in_focus) {
+      trigger_shutter_internal(false);
+    } else {
+      update_info();
+    }
   } else {
     update_info(); 
   }
