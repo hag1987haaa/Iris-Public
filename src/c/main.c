@@ -4,7 +4,7 @@
 #define PERSIST_KEY_SETTINGS 1
 #define PERSIST_KEY_ACTIVE_BIZ 2
 #define PERSIST_KEY_SETTINGS_VERSION 100
-#define CURRENT_SETTINGS_VERSION 3
+#define CURRENT_SETTINGS_VERSION 4
 
 typedef enum { WeatherClear, WeatherCloudy, WeatherRainy, WeatherSnowy, WeatherThunder } WeatherStatus;
 
@@ -15,6 +15,8 @@ typedef struct {
   bool enable_business; int biz_start_h; int biz_end_h; 
   int biz_face; int biz_theme; int biz_shutter; int chime_interval;
   int biz_days; int biz_chime_interval; int biz_vibe_mode;
+  int text_style;  // 0: Flat, 1: Drop Shadow, 2: Outline
+  int biz_bg_mode; // 0: None (Solid), 1: Same as Normal, 2: Biz Image
 } ClaySettings;
 
 static ClaySettings s_settings;
@@ -32,6 +34,8 @@ static time_t s_last_chime_time = 0;
 // 定期バイブ（インターバルチャイム）直後のモーター振動ノイズによるタップ誤検知フラグ
 static bool s_block_tap_from_vibe = false;
 static AppTimer *s_unblock_tap_timer = NULL;
+static AppTimer *s_anim_timer = NULL;
+static AppTimer *s_delayed_shutter_timer = NULL;
 
 static void unblock_tap_cb(void *data) {
   s_block_tap_from_vibe = false;
@@ -62,60 +66,39 @@ static void adjust_layout(int16_t unobstructed_h);
 static void update_info(); 
 static void trigger_shutter_internal(bool manual);
 static void apply_theme_colors();
+#if defined(PBL_COLOR)
+static void unload_bg_bitmap(void);
+static void check_and_request_missing_bg(void);
+#endif
 
 // --- 設定・カラー管理 ---
 static void get_default_settings(ClaySettings *settings) {
-  #if defined(PBL_COLOR)
-    *settings = (ClaySettings){
-      .watchface_mode = 0,      // Digital
-      .theme = 0,               // White
-      .anim_speed = 40,         // 400ms
-      .anim_freq = 1,           // 1 min
-      .anim_mode = 0,           // Full
-      .vibe_mode = 2,           // Shake Only
-      .shutter_thick = 1,       // Medium
-      .battery_color_sync = true,
-      .shutter_color_mode = 4,  // Pastel Rainbow
-      .custom_shutter_color = GColorCyan,
-      .weather = WeatherCloudy,
-      .tomorrow_weather = WeatherClear,
-      .enable_business = false,
-      .biz_start_h = 9,         // 9:00
-      .biz_end_h = 18,          // 18:00
-      .biz_face = 1,            // Analog
-      .biz_theme = 0,           // Black / Black
-      .biz_shutter = 0,         // Wide
-      .chime_interval = 60,     // Every 1 Hour
-      .biz_days = 1,            // Weekdays (Mon-Fri)
-      .biz_chime_interval = 60, // Every 1 Hour
-      .biz_vibe_mode = 1        // Periodic Only
-    };
-  #else
-    *settings = (ClaySettings){
-      .watchface_mode = 0,      // Digital
-      .theme = 0,               // White
-      .anim_speed = 40,         // 400ms
-      .anim_freq = 1,           // 1 min
-      .anim_mode = 0,           // Full
-      .vibe_mode = 2,           // Shake Only
-      .shutter_thick = 1,       // Medium
-      .battery_color_sync = true,
-      .shutter_color_mode = 0,  // Solid Black (BW)
-      .custom_shutter_color = GColorCyan,
-      .weather = WeatherCloudy,
-      .tomorrow_weather = WeatherClear,
-      .enable_business = false,
-      .biz_start_h = 9,         // 9:00
-      .biz_end_h = 18,          // 18:00
-      .biz_face = 1,            // Analog
-      .biz_theme = 0,           // Black / Black
-      .biz_shutter = 0,         // Wide
-      .chime_interval = 60,     // Every 1 Hour
-      .biz_days = 1,            // Weekdays (Mon-Fri)
-      .biz_chime_interval = 60, // Every 1 Hour
-      .biz_vibe_mode = 1        // Periodic Only
-    };
-  #endif
+  *settings = (ClaySettings){
+    .watchface_mode = 0,      // Digital
+    .theme = 0,               // White
+    .anim_speed = 40,         // 400ms
+    .anim_freq = 1,           // 1 min
+    .anim_mode = 0,           // Full
+    .vibe_mode = 2,           // Shake Only
+    .shutter_thick = 1,       // Medium
+    .battery_color_sync = true,
+    .shutter_color_mode = PBL_IF_COLOR_ELSE(4, 0), // Pastel Rainbow (Color) / Solid Black (BW)
+    .custom_shutter_color = GColorCyan,
+    .weather = WeatherCloudy,
+    .tomorrow_weather = WeatherClear,
+    .enable_business = false,
+    .biz_start_h = 9,         // 9:00
+    .biz_end_h = 18,          // 18:00
+    .biz_face = 1,            // Analog
+    .biz_theme = 0,           // Black / Black
+    .biz_shutter = 0,         // Wide
+    .chime_interval = 60,     // Every 1 Hour
+    .biz_days = 1,            // Weekdays (Mon-Fri)
+    .biz_chime_interval = 60, // Every 1 Hour
+    .biz_vibe_mode = 1,       // Periodic Only
+    .text_style = 0,          // Flat
+    .biz_bg_mode = 0          // None (Solid)
+  };
 }
 
 static void sanitize_settings(ClaySettings *s) {
@@ -142,6 +125,399 @@ static void sanitize_settings(ClaySettings *s) {
   if (s->biz_days < 0 || s->biz_days > 1) s->biz_days = 1;
   if (s->biz_chime_interval <= 0 || s->biz_chime_interval > 60) s->biz_chime_interval = 60;
   if (s->biz_vibe_mode < 0 || s->biz_vibe_mode > 3) s->biz_vibe_mode = 1;
+  if (s->text_style < 0 || s->text_style > 2) s->text_style = 0;
+  if (s->biz_bg_mode < 0 || s->biz_bg_mode > 2) s->biz_bg_mode = 0;
+}
+
+#if defined(PBL_COLOR)
+#define PERSIST_KEY_BG_META 199
+#define PERSIST_KEY_BG_CACHE_BASE 200
+#define BG_CACHE_MAX_KEYS 14
+#define BG_CACHE_CHUNK_SIZE 256
+#define BG_CACHE_RADIUS_SQ 2209 // 半径47 (フル解像度で直径188pxの丸窓アパーチャ領域をカバー)
+#define BG_CACHE_MAGIC 0x4952   // "IR" 高密度4bitキャッシュ形式マーカー
+
+typedef struct {
+  uint16_t magic;
+  uint16_t full_w;
+  uint16_t full_h;
+  uint16_t cache_w;
+  uint16_t cache_h;
+  uint8_t palette[16];
+} BgCacheMeta;
+
+static GBitmap *s_bg_bitmap = NULL;
+static int s_current_loaded_target = -1; // -1: none, 0: normal, 1: biz
+static size_t s_image_rx_bytes = 0;
+static bool s_is_rx_complete = false;
+static bool s_is_full_res_loaded = false;
+static AppTimer *s_bg_req_retry_timer = NULL;
+static AppTimer *s_rx_watchdog_timer = NULL;
+static int s_pending_req_target = 0;
+
+static void rx_watchdog_cb(void *data) {
+  s_rx_watchdog_timer = NULL;
+  s_image_rx_bytes = 0;
+}
+
+static void clear_bg_cache_persist(void) {
+  if (persist_exists(PERSIST_KEY_BG_META)) {
+    persist_delete(PERSIST_KEY_BG_META);
+  }
+}
+
+static void write_cache_key_if_changed(int pkey, const void *buf, size_t len) {
+  uint8_t existing_buf[BG_CACHE_CHUNK_SIZE];
+  if (persist_exists(pkey) &&
+      persist_read_data(pkey, existing_buf, len) == (int)len &&
+      memcmp(buf, existing_buf, len) == 0) {
+    return;
+  }
+  persist_write_data(pkey, buf, len);
+}
+
+static inline uint8_t get_block_avg_color6(const uint8_t *src, int width, int height, int bx, int by) {
+  int r_sum = 0, g_sum = 0, b_sum = 0, cnt = 0;
+  for (int dy = 0; dy < 2 && (by + dy) < height; dy++) {
+    const uint8_t *row = src + (by + dy) * width + bx;
+    for (int dx = 0; dx < 2 && (bx + dx) < width; dx++) {
+      uint8_t c = row[dx];
+      r_sum += (c >> 4) & 0x03;
+      g_sum += (c >> 2) & 0x03;
+      b_sum += c & 0x03;
+      cnt++;
+    }
+  }
+  if (cnt == 0) return 0;
+  int r = (r_sum + (cnt >> 1)) / cnt;
+  int g = (g_sum + (cnt >> 1)) / cnt;
+  int b = (b_sum + (cnt >> 1)) / cnt;
+  return (uint8_t)((r << 4) | (g << 2) | b);
+}
+
+static inline int color6_dist_sq(uint8_t c1, uint8_t c2) {
+  int dr = (int)((c1 >> 4) & 0x03) - (int)((c2 >> 4) & 0x03);
+  int dg = (int)((c1 >> 2) & 0x03) - (int)((c2 >> 2) & 0x03);
+  int db = (int)(c1 & 0x03) - (int)(c2 & 0x03);
+  return dr * dr + dg * dg + db * db;
+}
+
+static void save_bg_cache_to_persist(int width, int height) {
+  if (!s_bg_bitmap) return;
+  uint8_t *src = gbitmap_get_data(s_bg_bitmap);
+  if (!src) return;
+
+  uint16_t cw = width / 2;
+  uint16_t ch = height / 2;
+  int cx_center = cw / 2;
+  int cy_center = ch / 2;
+
+  // 1. 丸窓領域内の64色ヒストグラムを集計
+  uint16_t hist[64];
+  memset(hist, 0, sizeof(hist));
+  for (int cy = 0; cy < (int)ch; cy++) {
+    int dy = cy - cy_center;
+    for (int cx = 0; cx < (int)cw; cx++) {
+      int dx = cx - cx_center;
+      if (dx * dx + dy * dy <= BG_CACHE_RADIUS_SQ) {
+        hist[get_block_avg_color6(src, width, height, cx * 2, cy * 2)]++;
+      }
+    }
+  }
+
+  // 2. 代表16色パレットの選出（色空間の多様性を確保しつつ頻出順）
+  uint8_t palette[16];
+  bool used[64];
+  memset(used, 0, sizeof(used));
+  int pal_count = 0;
+
+  for (int pass = 0; pass < 2 && pal_count < 16; pass++) {
+    int min_dist = (pass == 0) ? 2 : 0;
+    while (pal_count < 16) {
+      int best_c = -1;
+      uint16_t best_cnt = 0;
+      for (int c = 0; c < 64; c++) {
+        if (used[c] || hist[c] == 0) continue;
+        if (min_dist > 0) {
+          bool too_close = false;
+          for (int p = 0; p < pal_count; p++) {
+            if (color6_dist_sq((uint8_t)c, palette[p] & 0x3F) < min_dist) {
+              too_close = true;
+              break;
+            }
+          }
+          if (too_close) continue;
+        }
+        if (hist[c] > best_cnt) {
+          best_cnt = hist[c];
+          best_c = c;
+        }
+      }
+      if (best_c < 0) break;
+      used[best_c] = true;
+      palette[pal_count++] = (uint8_t)(0xC0 | best_c);
+    }
+  }
+  while (pal_count < 16) {
+    palette[pal_count] = (pal_count > 0) ? palette[0] : 0xC0;
+    pal_count++;
+  }
+
+  // 3. 64色 -> 16色パレットインデックス(0..15)の高速変換LUT作成
+  uint8_t lut[64];
+  for (int c = 0; c < 64; c++) {
+    int best_p = 0, best_d = 999;
+    for (int p = 0; p < 16; p++) {
+      int d = color6_dist_sq((uint8_t)c, palette[p] & 0x3F);
+      if (d < best_d) { best_d = d; best_p = p; }
+    }
+    lut[c] = (uint8_t)best_p;
+  }
+
+  // 4. 4bitパッキング（1バイトに2サンプル）してpersistへ保存（差分があるチャンクのみ書き込み）
+  uint8_t chunk_buf[BG_CACHE_CHUNK_SIZE];
+  size_t byte_idx = 0;
+  int key_idx = 0;
+  bool high_nibble = true;
+  uint8_t cur_byte = 0;
+
+  for (int cy = 0; cy < (int)ch; cy++) {
+    int dy = cy - cy_center;
+    for (int cx = 0; cx < (int)cw; cx++) {
+      int dx = cx - cx_center;
+      if (dx * dx + dy * dy > BG_CACHE_RADIUS_SQ) continue;
+
+      uint8_t p_idx = lut[get_block_avg_color6(src, width, height, cx * 2, cy * 2)] & 0x0F;
+      if (high_nibble) {
+        cur_byte = (uint8_t)(p_idx << 4);
+        high_nibble = false;
+      } else {
+        chunk_buf[byte_idx++] = cur_byte | p_idx;
+        high_nibble = true;
+        if (byte_idx == BG_CACHE_CHUNK_SIZE) {
+          if (key_idx < BG_CACHE_MAX_KEYS) {
+            write_cache_key_if_changed(PERSIST_KEY_BG_CACHE_BASE + key_idx, chunk_buf, BG_CACHE_CHUNK_SIZE);
+          }
+          byte_idx = 0;
+          key_idx++;
+        }
+      }
+    }
+  }
+
+  if (!high_nibble) chunk_buf[byte_idx++] = cur_byte;
+  if (byte_idx > 0 && key_idx < BG_CACHE_MAX_KEYS) {
+    write_cache_key_if_changed(PERSIST_KEY_BG_CACHE_BASE + key_idx, chunk_buf, byte_idx);
+  }
+
+  BgCacheMeta meta = {
+    .magic = BG_CACHE_MAGIC,
+    .full_w = (uint16_t)width,
+    .full_h = (uint16_t)height,
+    .cache_w = cw,
+    .cache_h = ch
+  };
+  memcpy(meta.palette, palette, 16);
+  write_cache_key_if_changed(PERSIST_KEY_BG_META, &meta, sizeof(meta));
+}
+
+static bool load_bg_cache_from_persist(void) {
+  if (!persist_exists(PERSIST_KEY_BG_META)) return false;
+
+  BgCacheMeta meta;
+  if (persist_read_data(PERSIST_KEY_BG_META, &meta, sizeof(meta)) != (int)sizeof(meta)) {
+    return false;
+  }
+  if (meta.magic != BG_CACHE_MAGIC) return false;
+
+  uint16_t width = meta.full_w;
+  uint16_t height = meta.full_h;
+  uint16_t cw = meta.cache_w;
+  uint16_t ch = meta.cache_h;
+  if (width == 0 || height == 0 || cw == 0 || ch == 0) return false;
+
+  if (s_bg_bitmap == NULL) {
+    s_bg_bitmap = gbitmap_create_blank(GSize(width, height), GBitmapFormat8Bit);
+  }
+  if (s_bg_bitmap == NULL) return false;
+
+  uint8_t *dst = gbitmap_get_data(s_bg_bitmap);
+  if (!dst) return false;
+
+  memset(dst, meta.palette[0], (size_t)width * (size_t)height);
+
+  uint8_t chunk_buf[BG_CACHE_CHUNK_SIZE];
+  size_t chunk_offset = BG_CACHE_CHUNK_SIZE;
+  int key_idx = 0;
+  bool high_nibble = true;
+  uint8_t cur_byte = 0;
+
+  int cx_center = cw / 2;
+  int cy_center = ch / 2;
+
+  // パス1: 4bitパレットデータを展開して2x2ブロック基準点を配置
+  for (int cy = 0; cy < (int)ch; cy++) {
+    int dy_c = cy - cy_center;
+    for (int cx = 0; cx < (int)cw; cx++) {
+      int dx_c = cx - cx_center;
+      if (dx_c * dx_c + dy_c * dy_c > BG_CACHE_RADIUS_SQ) continue;
+
+      uint8_t p_idx;
+      if (high_nibble) {
+        if (chunk_offset >= BG_CACHE_CHUNK_SIZE) {
+          if (key_idx >= BG_CACHE_MAX_KEYS) return false;
+          int pkey = PERSIST_KEY_BG_CACHE_BASE + key_idx;
+          if (!persist_exists(pkey)) return false;
+          persist_read_data(pkey, chunk_buf, BG_CACHE_CHUNK_SIZE);
+          chunk_offset = 0;
+          key_idx++;
+        }
+        cur_byte = chunk_buf[chunk_offset++];
+        p_idx = (cur_byte >> 4) & 0x0F;
+        high_nibble = false;
+      } else {
+        p_idx = cur_byte & 0x0F;
+        high_nibble = true;
+      }
+
+      uint8_t color = meta.palette[p_idx];
+      int base_y = cy * 2;
+      int base_x = cx * 2;
+      for (int dy = 0; dy < 2 && (base_y + dy) < (int)height; dy++) {
+        uint8_t *row = dst + (base_y + dy) * width + base_x;
+        for (int dx = 0; dx < 2 && (base_x + dx) < (int)width; dx++) {
+          row[dx] = color;
+        }
+      }
+    }
+  }
+
+  // パス2: サブピクセル・バイリニア＋ディザ補間で2x2ブロック境界のモザイク感を完全平滑化
+  for (int cy = 0; cy < (int)ch - 1; cy++) {
+    int dy_c = cy - cy_center;
+    int by = cy * 2;
+    if (by + 1 >= (int)height) continue;
+    for (int cx = 0; cx < (int)cw - 1; cx++) {
+      int dx_c = cx - cx_center;
+      if (dx_c * dx_c + dy_c * dy_c > BG_CACHE_RADIUS_SQ) continue;
+      int bx = cx * 2;
+      if (bx + 1 >= (int)width) continue;
+
+      uint8_t c00 = dst[by * width + bx];
+      uint8_t c10 = dst[by * width + (bx + 2)];
+      uint8_t c01 = dst[(by + 2) * width + bx];
+      uint8_t c11 = dst[(by + 2) * width + (bx + 2)];
+
+      int r00 = (c00 >> 4) & 3, g00 = (c00 >> 2) & 3, b00 = c00 & 3;
+      int r10 = (c10 >> 4) & 3, g10 = (c10 >> 2) & 3, b10 = c10 & 3;
+      int r01 = (c01 >> 4) & 3, g01 = (c01 >> 2) & 3, b01 = c01 & 3;
+      int r11 = (c11 >> 4) & 3, g11 = (c11 >> 2) & 3, b11 = c11 & 3;
+
+      // 右隣ピクセル (bx+1, by)
+      dst[by * width + bx + 1] = (uint8_t)(0xC0 | (((r00 + r10) >> 1) << 4) | (((g00 + g10) >> 1) << 2) | ((b00 + b10) >> 1));
+      // 下隣ピクセル (bx, by+1)
+      dst[(by + 1) * width + bx] = (uint8_t)(0xC0 | (((r00 + r01 + 1) >> 1) << 4) | (((g00 + g01 + 1) >> 1) << 2) | ((b00 + b01 + 1) >> 1));
+      // 斜め中央ピクセル (bx+1, by+1)
+      dst[(by + 1) * width + bx + 1] = (uint8_t)(0xC0 | (((r00 + r10 + r01 + r11 + 2) >> 2) << 4) | (((g00 + g10 + g01 + g11 + 2) >> 2) << 2) | ((b00 + b10 + b01 + b11 + 2) >> 2));
+    }
+  }
+
+  s_current_loaded_target = 0;
+  s_is_rx_complete = true;
+  s_is_full_res_loaded = false;
+  return true;
+}
+
+static void unload_bg_bitmap(void) {
+  if (s_bg_req_retry_timer) {
+    app_timer_cancel(s_bg_req_retry_timer);
+    s_bg_req_retry_timer = NULL;
+  }
+  if (s_rx_watchdog_timer) {
+    app_timer_cancel(s_rx_watchdog_timer);
+    s_rx_watchdog_timer = NULL;
+  }
+  if (s_bg_bitmap) {
+    gbitmap_destroy(s_bg_bitmap);
+    s_bg_bitmap = NULL;
+  }
+  s_current_loaded_target = -1;
+  s_image_rx_bytes = 0;
+  s_is_rx_complete = false;
+  s_is_full_res_loaded = false;
+}
+
+static void request_bg_image_from_phone(int target);
+
+static void bg_req_retry_cb(void *data) {
+  s_bg_req_retry_timer = NULL;
+  request_bg_image_from_phone(s_pending_req_target);
+}
+
+static void request_bg_image_from_phone(int target) {
+  DictionaryIterator *iter;
+  if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
+    dict_write_int(iter, MESSAGE_KEY_RequestBgImage, &target, sizeof(int), true);
+    app_message_outbox_send();
+  } else {
+    s_pending_req_target = target;
+    if (s_bg_req_retry_timer) app_timer_cancel(s_bg_req_retry_timer);
+    s_bg_req_retry_timer = app_timer_register(250, bg_req_retry_cb, NULL);
+  }
+}
+
+static void check_and_request_missing_bg(void) {
+  int needed_target = -1;
+  if (!s_active_biz_mode || s_settings.biz_bg_mode == 1) {
+    needed_target = 0;
+  } else if (s_settings.biz_bg_mode == 2) {
+    needed_target = 1;
+  } else {
+    // biz_bg_mode == 0 (Solid Color Stealth): 画像は要求しない。通常画像がRAMにあればそのまま温存！
+    return;
+  }
+
+  // すでに目的のフル解像度画像がロード済みなら何もしない
+  if (s_bg_bitmap != NULL && s_is_rx_complete && s_is_full_res_loaded && s_current_loaded_target == needed_target) {
+    return;
+  }
+
+  // ビジネス専用画像(target 1)から通常画像(target 0)へ戻った場合など、まず時計内キャッシュから0.01秒で即座に復元！
+  if (needed_target == 0 && (s_bg_bitmap == NULL || s_current_loaded_target != 0 || !s_is_rx_complete)) {
+    load_bg_cache_from_persist();
+  }
+
+  if (!s_image_rx_bytes) {
+    if (s_bg_bitmap != NULL && s_is_rx_complete && s_current_loaded_target == needed_target) {
+      // キャッシュ画像が表示中の場合は、起動時のシャッター変形アニメ(約550ms)が完全に終わってから
+      // 裏でBluetooth転送を開始することで、2枚目のBitmap(45.6KB)を使わずに画面のチラつき・飛びをゼロにする！
+      s_pending_req_target = needed_target;
+      if (s_bg_req_retry_timer) app_timer_cancel(s_bg_req_retry_timer);
+      s_bg_req_retry_timer = app_timer_register(600, bg_req_retry_cb, NULL);
+    } else {
+      request_bg_image_from_phone(needed_target);
+    }
+  }
+}
+#endif
+
+static void draw_text_styled(GContext *ctx, const char *text, GFont font, GRect rect, 
+                             GTextOverflowMode overflow, GTextAlignment align, 
+                             GColor text_color, int style_mode) {
+  if (style_mode > 0) {
+    graphics_context_set_text_color(ctx, gcolor_legible_over(text_color));
+    static const int8_t dx[4] = {-1, 1, 0, 0};
+    static const int8_t dy[4] = {0, 0, -1, 1};
+    if (style_mode == 1) {
+      graphics_draw_text(ctx, text, font, GRect(rect.origin.x + 1, rect.origin.y + 1, rect.size.w, rect.size.h), overflow, align, NULL);
+    } else {
+      for (int i = 0; i < 4; i++) {
+        graphics_draw_text(ctx, text, font, GRect(rect.origin.x + dx[i], rect.origin.y + dy[i], rect.size.w, rect.size.h), overflow, align, NULL);
+      }
+    }
+  }
+  graphics_context_set_text_color(ctx, text_color);
+  graphics_draw_text(ctx, text, font, rect, overflow, align, NULL);
 }
 
 static void apply_theme_colors() {
@@ -154,6 +530,9 @@ static void apply_theme_colors() {
     bg = (s_settings.theme == 0) ? GColorWhite : GColorBlack;
   }
   window_set_background_color(s_main_window, bg);
+#if defined(PBL_COLOR)
+  check_and_request_missing_bg();
+#endif
 }
 
 static void save_settings() { 
@@ -237,12 +616,115 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
       dict_write_int32(out_iter, MESSAGE_KEY_BizDays, s_settings.biz_days);
       dict_write_int32(out_iter, MESSAGE_KEY_BizChimeInterval, s_settings.biz_chime_interval);
       dict_write_int32(out_iter, MESSAGE_KEY_BizVibeMode, s_settings.biz_vibe_mode);
+      dict_write_int32(out_iter, MESSAGE_KEY_TextStyle, s_settings.text_style);
+      dict_write_int32(out_iter, MESSAGE_KEY_BizBgMode, s_settings.biz_bg_mode);
 
       app_message_outbox_send();
     }
+    #if defined(PBL_COLOR)
+    // PKJSがreadyになったタイミングなので、フル解像度画像が未ロードなら背景チェックを実行
+    check_and_request_missing_bg();
+    #endif
     return;
   }
   // =========================================================================
+
+  // =========================================================================
+  // 画像クリアコマンドの受信
+  // =========================================================================
+  if ((t = dict_find(iter, MESSAGE_KEY_BgImageClear))) {
+    #if defined(PBL_COLOR)
+    int clear_target = get_dict_int(t);
+    if (clear_target == 0) {
+      clear_bg_cache_persist();
+    }
+    if (s_current_loaded_target == clear_target || s_current_loaded_target == -1) {
+      unload_bg_bitmap();
+      check_and_request_missing_bg();
+      if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+    }
+    #endif
+    return;
+  }
+
+  // =========================================================================
+  // 画像チャンクデータの受信（シングルバッファ＋静止中更新でRAM半減＆白画面ゼロ化）
+  // =========================================================================
+  if ((t = dict_find(iter, MESSAGE_KEY_BgImageData))) {
+    #if defined(PBL_COLOR)
+    Tuple *t_target = dict_find(iter, MESSAGE_KEY_BgImageTarget);
+    Tuple *t_chunk_idx = dict_find(iter, MESSAGE_KEY_BgImageChunkIdx);
+    Tuple *t_total_chunks = dict_find(iter, MESSAGE_KEY_BgImageTotalChunks);
+    Tuple *t_width = dict_find(iter, MESSAGE_KEY_BgImageWidth);
+    Tuple *t_height = dict_find(iter, MESSAGE_KEY_BgImageHeight);
+
+    int target = t_target ? get_dict_int(t_target) : 0;
+    int chunk_idx = t_chunk_idx ? get_dict_int(t_chunk_idx) : 0;
+    int total_chunks = t_total_chunks ? get_dict_int(t_total_chunks) : 1;
+    int width = t_width ? get_dict_int(t_width) : 144;
+    int height = t_height ? get_dict_int(t_height) : 168;
+
+    // 通信中断時でも5秒後にロックを自動解除するウォッチドッグタイマー
+    if (s_rx_watchdog_timer) app_timer_cancel(s_rx_watchdog_timer);
+    s_rx_watchdog_timer = app_timer_register(5000, rx_watchdog_cb, NULL);
+
+    if (chunk_idx == 0) {
+      s_image_rx_bytes = 0;
+      if (s_bg_bitmap != NULL) {
+        GSize cur_size = gbitmap_get_bounds(s_bg_bitmap).size;
+        if (cur_size.w != width || cur_size.h != height) {
+          gbitmap_destroy(s_bg_bitmap);
+          s_bg_bitmap = NULL;
+          s_is_rx_complete = false;
+        }
+      }
+      if (s_bg_bitmap == NULL) {
+        s_bg_bitmap = gbitmap_create_blank(GSize(width, height), GBitmapFormat8Bit);
+        s_is_rx_complete = false;
+      }
+      if (s_current_loaded_target != target) {
+        s_is_rx_complete = false;
+      }
+    }
+
+    if (s_bg_bitmap != NULL) {
+      uint8_t *bitmap_data = gbitmap_get_data(s_bg_bitmap);
+      size_t max_bytes = width * height;
+      size_t chunk_len = t->length;
+
+      if (bitmap_data && s_image_rx_bytes + chunk_len <= max_bytes) {
+        memcpy(bitmap_data + s_image_rx_bytes, t->value->data, chunk_len);
+        s_image_rx_bytes += chunk_len;
+      }
+
+      // 全チャンク受信完了！
+      if (chunk_idx == total_chunks - 1) {
+        if (s_rx_watchdog_timer) {
+          app_timer_cancel(s_rx_watchdog_timer);
+          s_rx_watchdog_timer = NULL;
+        }
+        bool was_already_visible = s_is_rx_complete && (s_current_loaded_target == target);
+        s_is_rx_complete = true;
+        s_is_full_res_loaded = true;
+        s_current_loaded_target = target;
+        s_image_rx_bytes = 0;
+
+        // 通常背景（target == 0）は時計本体のフラッシュ（persist）に高密度4bitキャッシュを保存！
+        if (target == 0) {
+          save_bg_cache_to_persist(width, height);
+        }
+
+        if (s_canvas_layer) {
+          layer_mark_dirty(s_canvas_layer);
+        }
+        if (!was_already_visible) {
+          trigger_shutter_internal(false);
+        }
+      }
+    }
+    #endif
+    return;
+  }
 	
   s_pending_settings = s_settings;
   s_has_pending_settings = true; 
@@ -272,6 +754,8 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   if((t=dict_find(iter, MESSAGE_KEY_BizDays))) s_pending_settings.biz_days = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_BizChimeInterval))) s_pending_settings.biz_chime_interval = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_BizVibeMode))) s_pending_settings.biz_vibe_mode = get_dict_int(t);
+  if((t=dict_find(iter, MESSAGE_KEY_TextStyle))) s_pending_settings.text_style = get_dict_int(t);
+  if((t=dict_find(iter, MESSAGE_KEY_BizBgMode))) s_pending_settings.biz_bg_mode = get_dict_int(t);
   
   sanitize_settings(&s_pending_settings);
   trigger_shutter_internal(false);
@@ -338,6 +822,7 @@ static GPoint get_ray_far_point(int i, int r, int32_t angle, GPoint center) {
 }
 
 static void next_frame_handler(void *data) {
+  s_anim_timer = NULL;
   if (!s_is_animating) return;
   float old = s_progress; 
   float total_duration_ms = (float)s_settings.anim_speed * 10.0f;
@@ -350,27 +835,21 @@ static void next_frame_handler(void *data) {
   if (old < 1.0f && s_progress >= 1.0f) {
     update_info();
     
-    // 設定すり替え
-    if (s_has_pending_settings) {
-      s_settings = s_pending_settings;   
-      s_has_pending_settings = false;    
-      save_settings();                   
+    // 設定すり替えまたはビジネスモード切り替え時のマジック変形！
+    if (s_has_pending_settings || s_pending_biz_update) {
+      if (s_has_pending_settings) {
+        s_settings = s_pending_settings;   
+        s_has_pending_settings = false;    
+        save_settings();                   
+        evaluate_context_modes();
+      }
+      s_active_biz_mode = is_biz_mode;
+      s_pending_biz_update = false;
+      persist_write_bool(PERSIST_KEY_ACTIVE_BIZ, s_active_biz_mode); 
+
       apply_theme_colors();              
       GRect unob = layer_get_unobstructed_bounds(window_get_root_layer(s_main_window));
       adjust_layout(unob.size.h);        
-    }
-
-    //ビジネスモード切り替え時のマジック変形！
-    if (s_pending_biz_update) {
-      s_active_biz_mode = is_biz_mode;
-      s_pending_biz_update = false;
-      
-      //変形完了！今のモードを脳裏に焼き付ける！
-      persist_write_bool(PERSIST_KEY_ACTIVE_BIZ, s_active_biz_mode); 
-      
-      apply_theme_colors();              
-      GRect unob = layer_get_unobstructed_bounds(window_get_root_layer(s_main_window));
-      adjust_layout(unob.size.h); 
     }
   }
   
@@ -378,7 +857,7 @@ static void next_frame_handler(void *data) {
     vibes_short_pulse();
   } 
   if (s_progress >= 2.0f) { s_progress = 0.0f; s_is_animating = false; s_vibrate_on_close = false; }
-  else { app_timer_register(FRAME_RATE_MS, next_frame_handler, NULL); }
+  else { s_anim_timer = app_timer_register(FRAME_RATE_MS, next_frame_handler, NULL); }
   layer_mark_dirty(s_canvas_layer);
 }
 
@@ -404,7 +883,8 @@ static void trigger_shutter_internal(bool manual) {
     s_vibrate_on_close = false;
   }
   
-  app_timer_register(FRAME_RATE_MS, next_frame_handler, NULL);
+  if (s_anim_timer) app_timer_cancel(s_anim_timer);
+  s_anim_timer = app_timer_register(FRAME_RATE_MS, next_frame_handler, NULL);
 }
 
 static void handle_tap(AccelAxisType axis, int32_t direction) {
@@ -413,6 +893,11 @@ static void handle_tap(AccelAxisType axis, int32_t direction) {
   
   // 定期バイブ（インターバルチャイム）のモーター振動ノイズならブロック
   if (s_block_tap_from_vibe) return;
+
+#if defined(PBL_COLOR)
+  // 画像チャンク受信中のシェイクは描画ティアリング防止のためブロック
+  if (s_image_rx_bytes > 0) return;
+#endif
 
   trigger_shutter_internal(true);
 }
@@ -619,7 +1104,7 @@ static GColor get_wing_fill_color(int wing_index) {
   }
 }
 
-static void draw_weather_icon(GContext *ctx, GPoint center, GColor color, WeatherStatus status) {
+static void draw_weather_icon_raw(GContext *ctx, GPoint center, GColor color, WeatherStatus status) {
   graphics_context_set_fill_color(ctx, color); graphics_context_set_stroke_color(ctx, color);
   switch (status) {
     case WeatherClear:
@@ -645,9 +1130,67 @@ static void draw_weather_icon(GContext *ctx, GPoint center, GColor color, Weathe
   }
 }
 
+static void draw_weather_icon(GContext *ctx, GPoint center, GColor color, WeatherStatus status, int style_mode) {
+  if (style_mode > 0) {
+    GColor shadow = gcolor_legible_over(color);
+    static const int8_t dx[4] = {-1, 1, 0, 0};
+    static const int8_t dy[4] = {0, 0, -1, 1};
+    if (style_mode == 1) {
+      draw_weather_icon_raw(ctx, (GPoint){center.x + 1, center.y + 1}, shadow, status);
+    } else {
+      for (int i = 0; i < 4; i++) {
+        draw_weather_icon_raw(ctx, (GPoint){center.x + dx[i], center.y + dy[i]}, shadow, status);
+      }
+    }
+  }
+  draw_weather_icon_raw(ctx, center, color, status);
+}
+
+static void draw_boot_icon_raw(GContext *ctx, int x, int y, int ex) {
+  graphics_fill_rect(ctx, GRect(x,     y + 6, 9 + ex, 2 + ex), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(x,     y,     3 + ex, 6 + ex), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(x + 3, y + 2, 3 + ex, 4 + ex), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(x + 6, y + 4, 3 + ex, 2 + ex), 0, GCornerNone);
+}
+
+static void draw_boot_icon(GContext *ctx, int boot_x, int boot_y, GColor color, int style_mode) {
+  if (style_mode > 0) {
+    graphics_context_set_fill_color(ctx, gcolor_legible_over(color));
+    if (style_mode == 1) {
+      draw_boot_icon_raw(ctx, boot_x + 2, boot_y + 4, 0);
+    } else {
+      draw_boot_icon_raw(ctx, boot_x, boot_y + 2, 2);
+    }
+  }
+  graphics_context_set_fill_color(ctx, color);
+  draw_boot_icon_raw(ctx, boot_x + 1, boot_y + 3, 0);
+}
+
 // 描画エンジン
 static void update_proc(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer); GPoint c = grect_center_point(&b); c.y -= s_unobstructed_y_offset;
+
+#if defined(PBL_COLOR)
+  bool should_draw_bg = false;
+  if (s_bg_bitmap != NULL && s_is_rx_complete) {
+    if (!s_active_biz_mode) {
+      if (s_current_loaded_target == 0) should_draw_bg = true;
+    } else {
+      if (s_settings.biz_bg_mode == 1 && s_current_loaded_target == 0) {
+        should_draw_bg = true;
+      } else if (s_settings.biz_bg_mode == 2 && s_current_loaded_target == 1) {
+        should_draw_bg = true;
+      }
+      // biz_bg_mode == 0: Solid color stealth (should_draw_bg = false)
+    }
+  }
+
+  if (should_draw_bg && s_bg_bitmap != NULL) {
+    graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+    graphics_draw_bitmap_in_rect(ctx, s_bg_bitmap, b);
+  }
+#endif
+
   float ev = (s_progress > 1.0) ? (2.0 - s_progress) : s_progress;
   
   //ビジネスモードなら設定を上書きする
@@ -713,23 +1256,35 @@ static void update_proc(Layer *layer, GContext *ctx) {
     }
     
     // 分マーカー（長針）
-    graphics_context_set_stroke_color(ctx, txt_color);
-    graphics_context_set_stroke_width(ctx, 5); 
     int m_d_start = h_orbit_r + 1;
     int m_d_end = b.size.w; 
     int32_t sin_m = sin_lookup(min_angle); int32_t cos_m = cos_lookup(min_angle);
     GPoint m_p_start = { c.x + (m_d_start * sin_m) / TRIG_MAX_RATIO, c.y - (m_d_start * cos_m) / TRIG_MAX_RATIO };
     GPoint m_p_end   = { c.x + (m_d_end * sin_m) / TRIG_MAX_RATIO, c.y - (m_d_end * cos_m) / TRIG_MAX_RATIO };
+    if (s_settings.text_style > 0) {
+      GColor shadow_color = gcolor_legible_over(txt_color);
+      graphics_context_set_stroke_color(ctx, shadow_color);
+      graphics_context_set_stroke_width(ctx, 7); 
+      graphics_draw_line(ctx, m_p_start, m_p_end);
+    }
+    graphics_context_set_stroke_color(ctx, txt_color);
+    graphics_context_set_stroke_width(ctx, 5); 
     graphics_draw_line(ctx, m_p_start, m_p_end);
 
     // 時マーカー（短針）
     GColor h_color = PBL_IF_COLOR_ELSE(GColorRed, txt_color);
-    graphics_context_set_stroke_color(ctx, h_color);
-    graphics_context_set_stroke_width(ctx, 6); 
     int32_t sin_h = sin_lookup(hour_angle); int32_t cos_h = cos_lookup(hour_angle);
     int h_start_r = safe_r + 2; int h_end_r = h_orbit_r - 2; 
     GPoint h_p_start = { c.x + (h_start_r * sin_h) / TRIG_MAX_RATIO, c.y - (h_start_r * cos_h) / TRIG_MAX_RATIO };
     GPoint h_p_end   = { c.x + (h_end_r * sin_h) / TRIG_MAX_RATIO, c.y - (h_end_r * cos_h) / TRIG_MAX_RATIO };
+    if (s_settings.text_style > 0) {
+      GColor shadow_color = gcolor_legible_over(h_color);
+      graphics_context_set_stroke_color(ctx, shadow_color);
+      graphics_context_set_stroke_width(ctx, 8); 
+      graphics_draw_line(ctx, h_p_start, h_p_end); 
+    }
+    graphics_context_set_stroke_color(ctx, h_color);
+    graphics_context_set_stroke_width(ctx, 6); 
     graphics_draw_line(ctx, h_p_start, h_p_end); 
   }
 
@@ -767,29 +1322,26 @@ static void update_proc(Layer *layer, GContext *ctx) {
       int f_h = s_current_f_size;
       int char_spacing = f_h / 2; 
       int gap = (f_h / 15 < 2) ? 2 : (f_h / 15);
-      int c1 = c.x - (gap / 2) - (char_spacing / 2); int c0 = c1 - char_spacing;
-      int c2 = c.x + (gap / 2) + (char_spacing / 2); int c3 = c2 + char_spacing;
+      int c1 = c.x - (gap / 2) - (char_spacing / 2);
+      int c2 = c.x + (gap / 2) + (char_spacing / 2);
+      int cx[4] = {c1 - char_spacing, c1, c2, c2 + char_spacing};
       int text_y = c.y - (f_h / 2) - (f_h / 6);
       
-      graphics_draw_text(ctx, s_time_chars[0], s_time_font, GRect(c0 - (f_h / 2), text_y, f_h, f_h+20), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
-      graphics_draw_text(ctx, s_time_chars[1], s_time_font, GRect(c1 - (f_h / 2), text_y, f_h, f_h+20), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
-      graphics_draw_text(ctx, s_time_chars[2], s_time_font, GRect(c2 - (f_h / 2), text_y, f_h, f_h+20), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
-      graphics_draw_text(ctx, s_time_chars[3], s_time_font, GRect(c3 - (f_h / 2), text_y, f_h, f_h+20), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+      for (int i = 0; i < 4; i++) {
+        draw_text_styled(ctx, s_time_chars[i], s_time_font, GRect(cx[i] - (f_h / 2), text_y, f_h, f_h + 20), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
+      }
 
       int line_top_y = c.y - (r / 2); int line_bottom_y = c.y + (r / 2);
 
-      graphics_draw_text(ctx, s_date_str, s_info_font, GRect(0, line_top_y - 12, b.size.w, 15), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+      draw_text_styled(ctx, s_date_str, s_info_font, GRect(0, line_top_y - 12, b.size.w, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
       int info_y = line_bottom_y - 2;
       int boot_x = c.x - 44; 
-      graphics_fill_rect(ctx, GRect(boot_x + 1, info_y + 9, 9, 2), 0, GCornerNone); 
-      graphics_fill_rect(ctx, GRect(boot_x + 1, info_y + 3, 3, 6), 0, GCornerNone); 
-      graphics_fill_rect(ctx, GRect(boot_x + 4, info_y + 5, 3, 4), 0, GCornerNone); 
-      graphics_fill_rect(ctx, GRect(boot_x + 7, info_y + 7, 3, 2), 0, GCornerNone);
+      draw_boot_icon(ctx, boot_x, info_y, txt_color, s_settings.text_style);
 
-      graphics_draw_text(ctx, s_steps_str, s_info_font, GRect(c.x - 30, info_y - 2, 45, 15), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-      draw_weather_icon(ctx, (GPoint){c.x + 16, info_y + 4}, txt_color, s_settings.weather);
-      graphics_draw_text(ctx, "/", s_info_font, GRect(c.x + 24, info_y - 2, 10, 15), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-      draw_weather_icon(ctx, (GPoint){c.x + 36, info_y + 4}, txt_color, s_settings.tomorrow_weather);
+      draw_text_styled(ctx, s_steps_str, s_info_font, GRect(c.x - 30, info_y - 2, 45, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
+      draw_weather_icon(ctx, (GPoint){c.x + 16, info_y + 4}, txt_color, s_settings.weather, s_settings.text_style);
+      draw_text_styled(ctx, "/", s_info_font, GRect(c.x + 24, info_y - 2, 10, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
+      draw_weather_icon(ctx, (GPoint){c.x + 36, info_y + 4}, txt_color, s_settings.tomorrow_weather, s_settings.text_style);
 
     } else {
       // アナログ時計モード
@@ -798,17 +1350,14 @@ static void update_proc(Layer *layer, GContext *ctx) {
       int bot_weather_y = c.y + 11; 
 
       int boot_x = c.x - 22; 
-      graphics_fill_rect(ctx, GRect(boot_x + 1, top_steps_y + 11, 9, 2), 0, GCornerNone); 
-      graphics_fill_rect(ctx, GRect(boot_x + 1, top_steps_y + 5,  3, 6), 0, GCornerNone); 
-      graphics_fill_rect(ctx, GRect(boot_x + 4, top_steps_y + 7,  3, 4), 0, GCornerNone); 
-      graphics_fill_rect(ctx, GRect(boot_x + 7, top_steps_y + 9,  3, 2), 0, GCornerNone); 
-      graphics_draw_text(ctx, s_steps_str, s_info_font, GRect(boot_x + 14, top_steps_y, 40, 15), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+      draw_boot_icon(ctx, boot_x, top_steps_y + 2, txt_color, s_settings.text_style);
+      draw_text_styled(ctx, s_steps_str, s_info_font, GRect(boot_x + 14, top_steps_y, 40, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
 
-      graphics_draw_text(ctx, s_date_str, s_info_font, GRect(0, mid_date_y, b.size.w, 15), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+      draw_text_styled(ctx, s_date_str, s_info_font, GRect(0, mid_date_y, b.size.w, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
 
-      draw_weather_icon(ctx, (GPoint){c.x - 10, bot_weather_y + 6}, txt_color, s_settings.weather);
-      graphics_draw_text(ctx, "/", s_info_font, GRect(c.x - 4, bot_weather_y, 10, 15), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
-      draw_weather_icon(ctx, (GPoint){c.x + 10, bot_weather_y + 6}, txt_color, s_settings.tomorrow_weather);
+      draw_weather_icon(ctx, (GPoint){c.x - 10, bot_weather_y + 6}, txt_color, s_settings.weather, s_settings.text_style);
+      draw_text_styled(ctx, "/", s_info_font, GRect(c.x - 4, bot_weather_y, 10, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
+      draw_weather_icon(ctx, (GPoint){c.x + 10, bot_weather_y + 6}, txt_color, s_settings.tomorrow_weather, s_settings.text_style);
     }
   }
 }
@@ -826,33 +1375,46 @@ static void main_window_load(Window *window) {
 #endif
   s_last_battery = battery_state_service_peek();
   
+#if defined(PBL_COLOR)
+  // 起動直後に時計本体の永続領域（persist）からキャッシュ画像を0.01秒で即座に復元！（白背景を完全防止）
+  load_bg_cache_from_persist();
+#endif
+
   apply_theme_colors(); 
   adjust_layout(fb.size.h); 
   update_info();
 }
 
-//0.8秒待ってから実行される「遅延シャッター関数」
+// 遅延シャッター関数（トースト通知が消えた直後に起動）
 static void delayed_shutter_cb(void *data) {
+  s_delayed_shutter_timer = NULL;
   if (s_pending_biz_update) {
     trigger_shutter_internal(false);
   }
 }
 
-//修正版フォーカス監視
+// 修正版フォーカス監視
 static void focus_handler(bool in_focus) {
   s_in_focus = in_focus;
   
   if (in_focus) {
     evaluate_context_modes();
     
-    // モード切り替えがある場合、ポップアップが完全に消えるのを「1.0秒」待ってから変形する
+    // モード切り替えがある場合、ポップアップが消えたら間髪を容れずスッと変形（150ms）
     if (s_pending_biz_update) {
-      app_timer_register(1000, delayed_shutter_cb, NULL); 
+      if (s_delayed_shutter_timer) app_timer_cancel(s_delayed_shutter_timer);
+      s_delayed_shutter_timer = app_timer_register(150, delayed_shutter_cb, NULL); 
     }
   }
 }
 
 static void main_window_unload(Window *window) {
+  if (s_unblock_tap_timer) { app_timer_cancel(s_unblock_tap_timer); s_unblock_tap_timer = NULL; }
+  if (s_anim_timer) { app_timer_cancel(s_anim_timer); s_anim_timer = NULL; }
+  if (s_delayed_shutter_timer) { app_timer_cancel(s_delayed_shutter_timer); s_delayed_shutter_timer = NULL; }
+#if defined(PBL_COLOR)
+  unload_bg_bitmap();
+#endif
   if (s_time_font) fonts_unload_custom_font(s_time_font); 
   fonts_unload_custom_font(s_info_font);
   gpath_destroy(s_dynamic_path); layer_destroy(s_canvas_layer);
@@ -864,7 +1426,7 @@ static void main_window_unload(Window *window) {
 int main(void) {
   load_settings(); 
   app_message_register_inbox_received(inbox_received_handler); 
-  app_message_open(256, 256);
+  app_message_open(PBL_IF_COLOR_ELSE(4096, 256), 256);
   
   s_main_window = window_create(); 
   window_set_window_handlers(s_main_window, (WindowHandlers){

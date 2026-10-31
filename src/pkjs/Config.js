@@ -91,12 +91,43 @@ module.exports = [
         "label": "Drop Blades on Low Battery",
         "description": "Blades will drop when battery is under 50%.",
         "defaultValue": true
+      },
+      {
+        "type": "select",
+        "messageKey": "TextStyle",
+        "label": "Text Style (Effect)",
+        "description": "Add drop shadow or outline to time and info text for high contrast over photos.",
+        "defaultValue": "0",
+        "options": [
+          { "label": "Flat (None)", "value": "0" },
+          { "label": "Drop Shadow", "value": "1" },
+          { "label": "Outline", "value": "2" }
+        ]
       }
     ]	
   },
 
   // ==========================================
-  // 2. 動きと振動 (Animation & Vibration)
+  // 2. カスタム背景画像 (Custom Background Image)
+  // ==========================================
+  {
+    "type": "section",
+    "capabilities": ["COLOR"],
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "📸 Custom Background Image"
+      },
+      {
+        "type": "text",
+        "id": "bg_normal_container",
+        "defaultValue": "<div id='bg_normal_container'></div>"
+      }
+    ]
+  },
+
+  // ==========================================
+  // 3. 動きと振動 (Animation & Vibration)
   // ==========================================
   {
     "type": "section",
@@ -257,6 +288,25 @@ module.exports = [
           { "label": "White / White", "value": "2" },
           { "label": "White / Black", "value": "3" }
         ]
+      },
+      {
+        "type": "select",
+        "messageKey": "BizBgMode",
+        "label": "Business Background Style",
+        "description": "Choose background style during business hours.",
+        "defaultValue": "0",
+        "capabilities": ["COLOR"],
+        "options": [
+          { "label": "Solid Color (Stealth)", "value": "0" },
+          { "label": "Same as Normal Background", "value": "1" },
+          { "label": "Custom Business Image", "value": "2" }
+        ]
+      },
+      {
+        "type": "text",
+        "id": "bg_biz_container",
+        "capabilities": ["COLOR"],
+        "defaultValue": "<div id='bg_biz_container'></div>"
       },
 {
         "type": "select",

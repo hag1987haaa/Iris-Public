@@ -39,7 +39,17 @@
             "BizDays",
             "BizChimeInterval",
             "BizVibeMode",
-            "RequestSettings"
+            "RequestSettings",
+            "TextStyle",
+            "BizBgMode",
+            "BgImageTarget",
+            "BgImageChunkIdx",
+            "BgImageTotalChunks",
+            "BgImageData",
+            "BgImageClear",
+            "BgImageWidth",
+            "BgImageHeight",
+            "RequestBgImage"
         ],
         "projectType": "native",
         "resources": {
