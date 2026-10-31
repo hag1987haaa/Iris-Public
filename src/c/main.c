@@ -1,6 +1,11 @@
 #include <pebble.h>
 
 // --- 設定・構造体 ---
+#define PERSIST_KEY_SETTINGS 1
+#define PERSIST_KEY_ACTIVE_BIZ 2
+#define PERSIST_KEY_SETTINGS_VERSION 100
+#define CURRENT_SETTINGS_VERSION 3
+
 typedef enum { WeatherClear, WeatherCloudy, WeatherRainy, WeatherSnowy, WeatherThunder } WeatherStatus;
 
 typedef struct { 
@@ -59,6 +64,86 @@ static void trigger_shutter_internal(bool manual);
 static void apply_theme_colors();
 
 // --- 設定・カラー管理 ---
+static void get_default_settings(ClaySettings *settings) {
+  #if defined(PBL_COLOR)
+    *settings = (ClaySettings){
+      .watchface_mode = 0,      // Digital
+      .theme = 0,               // White
+      .anim_speed = 40,         // 400ms
+      .anim_freq = 1,           // 1 min
+      .anim_mode = 0,           // Full
+      .vibe_mode = 2,           // Shake Only
+      .shutter_thick = 1,       // Medium
+      .battery_color_sync = true,
+      .shutter_color_mode = 4,  // Pastel Rainbow
+      .custom_shutter_color = GColorCyan,
+      .weather = WeatherCloudy,
+      .tomorrow_weather = WeatherClear,
+      .enable_business = false,
+      .biz_start_h = 9,         // 9:00
+      .biz_end_h = 18,          // 18:00
+      .biz_face = 1,            // Analog
+      .biz_theme = 0,           // Black / Black
+      .biz_shutter = 0,         // Wide
+      .chime_interval = 60,     // Every 1 Hour
+      .biz_days = 1,            // Weekdays (Mon-Fri)
+      .biz_chime_interval = 60, // Every 1 Hour
+      .biz_vibe_mode = 1        // Periodic Only
+    };
+  #else
+    *settings = (ClaySettings){
+      .watchface_mode = 0,      // Digital
+      .theme = 0,               // White
+      .anim_speed = 40,         // 400ms
+      .anim_freq = 1,           // 1 min
+      .anim_mode = 0,           // Full
+      .vibe_mode = 2,           // Shake Only
+      .shutter_thick = 1,       // Medium
+      .battery_color_sync = true,
+      .shutter_color_mode = 0,  // Solid Black (BW)
+      .custom_shutter_color = GColorCyan,
+      .weather = WeatherCloudy,
+      .tomorrow_weather = WeatherClear,
+      .enable_business = false,
+      .biz_start_h = 9,         // 9:00
+      .biz_end_h = 18,          // 18:00
+      .biz_face = 1,            // Analog
+      .biz_theme = 0,           // Black / Black
+      .biz_shutter = 0,         // Wide
+      .chime_interval = 60,     // Every 1 Hour
+      .biz_days = 1,            // Weekdays (Mon-Fri)
+      .biz_chime_interval = 60, // Every 1 Hour
+      .biz_vibe_mode = 1        // Periodic Only
+    };
+  #endif
+}
+
+static void sanitize_settings(ClaySettings *s) {
+  if (s->watchface_mode < 0 || s->watchface_mode > 1) s->watchface_mode = 0;
+  if (s->theme < 0 || s->theme > 1) s->theme = 0;
+  if (s->anim_speed < 10 || s->anim_speed > 100) s->anim_speed = 40;
+  if (s->anim_freq < 0 || s->anim_freq > 60) s->anim_freq = 1;
+  if (s->anim_mode < 0 || s->anim_mode > 3) s->anim_mode = 0;
+  if (s->vibe_mode < 0 || s->vibe_mode > 3) s->vibe_mode = 2;
+  if (s->shutter_thick < 0 || s->shutter_thick > 2) s->shutter_thick = 1;
+
+  #if defined(PBL_COLOR)
+    if (s->shutter_color_mode < 0 || s->shutter_color_mode > 6) s->shutter_color_mode = 4;
+  #else
+    if (s->shutter_color_mode < 0 || s->shutter_color_mode > 1) s->shutter_color_mode = 0;
+  #endif
+
+  if (s->biz_start_h < 0 || s->biz_start_h > 23) s->biz_start_h = 9;
+  if (s->biz_end_h < 0 || s->biz_end_h > 23) s->biz_end_h = 18;
+  if (s->biz_face < 0 || s->biz_face > 1) s->biz_face = 1;
+  if (s->biz_theme < 0 || s->biz_theme > 3) s->biz_theme = 0;
+  if (s->biz_shutter < 0 || s->biz_shutter > 1) s->biz_shutter = 0;
+  if (s->chime_interval <= 0 || s->chime_interval > 60) s->chime_interval = 60;
+  if (s->biz_days < 0 || s->biz_days > 1) s->biz_days = 1;
+  if (s->biz_chime_interval <= 0 || s->biz_chime_interval > 60) s->biz_chime_interval = 60;
+  if (s->biz_vibe_mode < 0 || s->biz_vibe_mode > 3) s->biz_vibe_mode = 1;
+}
+
 static void apply_theme_colors() {
   GColor bg;
   if (s_active_biz_mode) {
@@ -71,23 +156,43 @@ static void apply_theme_colors() {
   window_set_background_color(s_main_window, bg);
 }
 
-static void load_settings() {
-  #if defined(PBL_COLOR)
-    s_settings = (ClaySettings){0, 0, 40, 1, 0, 2, 1, true, 4, GColorCyan, WeatherCloudy, WeatherClear, false, 9, 18, 1, 0, 0, 60, 1, 60, 1};
-  #else
-    s_settings = (ClaySettings){0, 0, 40, 1, 0, 2, 1, true, 0, GColorCyan, WeatherCloudy, WeatherClear, false, 9, 18, 1, 0, 0, 60, 1, 60, 1};
-  #endif
-  
-  if(persist_exists(1)) persist_read_data(1, &s_settings, sizeof(s_settings));
+static void save_settings() { 
+  sanitize_settings(&s_settings);
+  persist_write_data(PERSIST_KEY_SETTINGS, &s_settings, sizeof(s_settings)); 
+  persist_write_int(PERSIST_KEY_SETTINGS_VERSION, CURRENT_SETTINGS_VERSION);
+}
 
-  //再起動しても、自分がビジネスモードだったかを思い出す！
-  if(persist_exists(2)) {
-    s_active_biz_mode = persist_read_bool(2);
+static void load_settings() {
+  get_default_settings(&s_settings);
+
+  bool need_fresh_save = false;
+  int version = persist_exists(PERSIST_KEY_SETTINGS_VERSION) ? persist_read_int(PERSIST_KEY_SETTINGS_VERSION) : 0;
+
+  if (version == CURRENT_SETTINGS_VERSION && persist_exists(PERSIST_KEY_SETTINGS)) {
+    int read_bytes = persist_read_data(PERSIST_KEY_SETTINGS, &s_settings, sizeof(s_settings));
+    if (read_bytes != (int)sizeof(s_settings)) {
+      // 保存データサイズ不一致（破損・古い設定）
+      get_default_settings(&s_settings);
+      need_fresh_save = true;
+    }
+  } else {
+    // バージョン不一致（旧バージョンからのアップデート直後など）
+    // 旧データによるズレを防ぐため、最新のデフォルト値でリセット！
+    need_fresh_save = true;
+  }
+
+  sanitize_settings(&s_settings);
+
+  if (need_fresh_save) {
+    save_settings();
+  }
+
+  // 再起動しても、自分がビジネスモードだったかを思い出す！
+  if (persist_exists(PERSIST_KEY_ACTIVE_BIZ)) {
+    s_active_biz_mode = persist_read_bool(PERSIST_KEY_ACTIVE_BIZ);
     is_biz_mode = s_active_biz_mode;
   }
 }
-
-static void save_settings() { persist_write_data(1, &s_settings, sizeof(s_settings)); }
 
 static int get_dict_int(Tuple *t) {
   if (!t) return 0;
@@ -167,6 +272,8 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   if((t=dict_find(iter, MESSAGE_KEY_BizDays))) s_pending_settings.biz_days = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_BizChimeInterval))) s_pending_settings.biz_chime_interval = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_BizVibeMode))) s_pending_settings.biz_vibe_mode = get_dict_int(t);
+  
+  sanitize_settings(&s_pending_settings);
   trigger_shutter_internal(false);
 }
 
@@ -259,7 +366,7 @@ static void next_frame_handler(void *data) {
       s_pending_biz_update = false;
       
       //変形完了！今のモードを脳裏に焼き付ける！
-      persist_write_bool(2, s_active_biz_mode); 
+      persist_write_bool(PERSIST_KEY_ACTIVE_BIZ, s_active_biz_mode); 
       
       apply_theme_colors();              
       GRect unob = layer_get_unobstructed_bounds(window_get_root_layer(s_main_window));
@@ -460,10 +567,12 @@ static void adjust_layout(int16_t unobstructed_h) {
   }
 }
 
+#if !defined(PBL_PLATFORM_APLITE)
 static void unobstructed_did_change(void *context) {
   GRect unob = layer_get_unobstructed_bounds(window_get_root_layer(s_main_window));
   adjust_layout(unob.size.h); layer_mark_dirty(s_canvas_layer);
 }
+#endif
 
 static GColor get_wing_fill_color(int wing_index) {
   // 🏢 ビジネスモード用の羽の色強制上書き
@@ -711,8 +820,10 @@ static void main_window_load(Window *window) {
   layer_set_update_proc(s_canvas_layer, update_proc); 
   layer_add_child(wl, s_canvas_layer);
   s_dynamic_path = gpath_create(&s_path_info);
+#if !defined(PBL_PLATFORM_APLITE)
   unobstructed_area_service_unsubscribe(); 
   unobstructed_area_service_subscribe((UnobstructedAreaHandlers) { .did_change = unobstructed_did_change }, NULL);
+#endif
   s_last_battery = battery_state_service_peek();
   
   apply_theme_colors(); 
@@ -745,7 +856,9 @@ static void main_window_unload(Window *window) {
   if (s_time_font) fonts_unload_custom_font(s_time_font); 
   fonts_unload_custom_font(s_info_font);
   gpath_destroy(s_dynamic_path); layer_destroy(s_canvas_layer);
+#if !defined(PBL_PLATFORM_APLITE)
   unobstructed_area_service_unsubscribe(); 
+#endif
 }
 
 int main(void) {
