@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "blade_ctrl.h"
 
 // --- 設定・構造体 ---
 #define PERSIST_KEY_SETTINGS 1
@@ -28,19 +29,8 @@ static bool is_biz_mode = false;        // 現在の「判定」結果
 static bool s_active_biz_mode = false;  // 現在「表示」されているモード（シャッター裏ですり替える用）
 static bool is_sleep_mode = false;      // スリープモード（強制ミュート）判定
 static bool s_pending_biz_update = false;
-static bool s_in_focus = true;  // 今画面がちゃんと見えているか？
 //最後に時報が鳴った時間を記憶する変数！
 static time_t s_last_chime_time = 0;
-// 定期バイブ（インターバルチャイム）直後のモーター振動ノイズによるタップ誤検知フラグ
-static bool s_block_tap_from_vibe = false;
-static AppTimer *s_unblock_tap_timer = NULL;
-static AppTimer *s_anim_timer = NULL;
-static AppTimer *s_delayed_shutter_timer = NULL;
-
-static void unblock_tap_cb(void *data) {
-  s_block_tap_from_vibe = false;
-  s_unblock_tap_timer = NULL;
-}
 
 static Window *s_main_window;
 static Layer *s_canvas_layer;
@@ -48,24 +38,16 @@ static char s_time_chars[4][2];
 static char s_date_str[16];
 static GFont s_time_font = NULL, s_info_font;
 
-static float s_progress = 0.0; 
-static bool s_is_animating = false, s_vibrate_on_close = false;
 static int s_unobstructed_y_offset = 0; 
 static BatteryChargeState s_last_battery;
 static char s_steps_str[16] = "00.0K"; 
 
 static int s_current_f_size = 0;
 
-static GPathInfo s_path_info = {.num_points = 4, .points = (GPoint[4]){{0,0},{0,0},{0,0},{0,0}}};
-static GPath *s_dynamic_path = NULL;
-
-#define FRAME_RATE_MS 33
-
 // --- プロトタイプ宣言（コンパイラエラー回避！） ---
 static void adjust_layout(int16_t unobstructed_h);
-static void update_info(); 
-static void trigger_shutter_internal(bool manual);
-static void apply_theme_colors();
+static void update_info(void); 
+static void apply_theme_colors(void);
 #if defined(PBL_COLOR)
 static void unload_bg_bitmap(void);
 static void check_and_request_missing_bg(void);
@@ -718,7 +700,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
           layer_mark_dirty(s_canvas_layer);
         }
         if (!was_already_visible) {
-          trigger_shutter_internal(false);
+          blade_ctrl_trigger(false);
         }
       }
     }
@@ -758,7 +740,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   if((t=dict_find(iter, MESSAGE_KEY_BizBgMode))) s_pending_settings.biz_bg_mode = get_dict_int(t);
   
   sanitize_settings(&s_pending_settings);
-  trigger_shutter_internal(false);
+  blade_ctrl_trigger(false);
 }
 
 //究極の「空気を読む」コンテキスト判定ロジック（夜勤・24時間完全対応版）
@@ -810,101 +792,47 @@ static void evaluate_context_modes() {
   is_sleep_mode = new_sleep;
 }
 
-static GPoint get_inner_vertex(int i, int r, int32_t angle, GPoint center) {
-  int32_t theta = (i * TRIG_MAX_ANGLE / 12) + angle;
-  return (GPoint){center.x + (r * cos_lookup(theta) / TRIG_MAX_RATIO), center.y + (r * sin_lookup(theta) / TRIG_MAX_RATIO)};
-}
-
-static GPoint get_ray_far_point(int i, int r, int32_t angle, GPoint center) {
-  GPoint v = get_inner_vertex(i, r, angle, center);
-  int32_t ray_angle = ((i * TRIG_MAX_ANGLE / 12) + angle) + (5 * TRIG_MAX_ANGLE / 24); 
-  return (GPoint){v.x + (400 * cos_lookup(ray_angle) / TRIG_MAX_RATIO), v.y + (400 * sin_lookup(ray_angle) / TRIG_MAX_RATIO)};
-}
-
-static void next_frame_handler(void *data) {
-  s_anim_timer = NULL;
-  if (!s_is_animating) return;
-  float old = s_progress; 
-  float total_duration_ms = (float)s_settings.anim_speed * 10.0f;
-  if (total_duration_ms < 100.0f) total_duration_ms = 100.0f; 
-  float frames_needed = total_duration_ms / (float)FRAME_RATE_MS;
-  float step = 2.0f / frames_needed; 
-  if (step < 0.05f) step = 0.05f; 
-  s_progress += step; 
-  
-  if (old < 1.0f && s_progress >= 1.0f) {
-    update_info();
-    
-    // 設定すり替えまたはビジネスモード切り替え時のマジック変形！
-    if (s_has_pending_settings || s_pending_biz_update) {
-      if (s_has_pending_settings) {
-        s_settings = s_pending_settings;   
-        s_has_pending_settings = false;    
-        save_settings();                   
-        evaluate_context_modes();
-      }
-      s_active_biz_mode = is_biz_mode;
-      s_pending_biz_update = false;
-      persist_write_bool(PERSIST_KEY_ACTIVE_BIZ, s_active_biz_mode); 
-
-      apply_theme_colors();              
-      GRect unob = layer_get_unobstructed_bounds(window_get_root_layer(s_main_window));
-      adjust_layout(unob.size.h);        
-    }
-  }
-  
-  if (old < 0.9f && s_progress >= 0.9f && s_vibrate_on_close) {
-    vibes_short_pulse();
-  } 
-  if (s_progress >= 2.0f) { s_progress = 0.0f; s_is_animating = false; s_vibrate_on_close = false; }
-  else { s_anim_timer = app_timer_register(FRAME_RATE_MS, next_frame_handler, NULL); }
-  layer_mark_dirty(s_canvas_layer);
-}
-
-static void trigger_shutter_internal(bool manual) {
-  if (s_is_animating) return;
-
-  // アニメーションモード判定（ビジネスモード切り替え時は強制的にアニメーション許可）
-  if (!s_pending_biz_update && !s_has_pending_settings) {
-    // 3: Disabled (一切アニメーションしない)
-    if (s_settings.anim_mode == 3) return;
-    // 1: Interval Only (手首シェイクでは動かさない)
-    if (manual && s_settings.anim_mode == 1) return;
-    // 2: Shake Only (タイマー等の自動では動かさない)
-    if (!manual && s_settings.anim_mode == 2) return;
-  }
-
-  s_is_animating = true; s_progress = 0.0;
-  
-  //手首シェイク時のバイブ制御（スリープモードなら絶対鳴らさない！）
-  if (manual && !is_sleep_mode && (s_settings.vibe_mode == 0 || s_settings.vibe_mode == 2)) {
-    s_vibrate_on_close = true; // 0: Shake&Chime, 2: Shake Only
-  } else {
-    s_vibrate_on_close = false;
-  }
-  
-  if (s_anim_timer) app_timer_cancel(s_anim_timer);
-  s_anim_timer = app_timer_register(FRAME_RATE_MS, next_frame_handler, NULL);
-}
-
-static void handle_tap(AccelAxisType axis, int32_t direction) {
-  //ビジネスモード中はシェイクを完全に無視！真面目な時計に徹する！
-  if (s_active_biz_mode) return;
-  
-  // 定期バイブ（インターバルチャイム）のモーター振動ノイズならブロック
-  if (s_block_tap_from_vibe) return;
-
+// --- ブレード制御モジュール連携コールバック ---
+static void get_blade_anim_config(BladeAnimConfig *out_cfg) {
+  out_cfg->anim_speed = s_settings.anim_speed;
+  out_cfg->anim_freq = s_settings.anim_freq;
+  out_cfg->anim_mode = s_settings.anim_mode;
+  out_cfg->vibe_mode = s_settings.vibe_mode;
+  out_cfg->is_sleep_mode = is_sleep_mode;
+  out_cfg->is_biz_mode = s_active_biz_mode;
+  out_cfg->has_pending_swap = (s_pending_biz_update || s_has_pending_settings);
+  out_cfg->has_pending_biz = s_pending_biz_update;
 #if defined(PBL_COLOR)
-  // 画像チャンク受信中のシェイクは描画ティアリング防止のためブロック
-  if (s_image_rx_bytes > 0) return;
+  out_cfg->block_tap_external = (s_image_rx_bytes > 0);
+#else
+  out_cfg->block_tap_external = false;
 #endif
+}
 
-  trigger_shutter_internal(true);
+static void on_blade_closed_midpoint(void) {
+  update_info();
+
+  // 設定すり替えまたはビジネスモード切り替え時のマジック変形！
+  if (s_has_pending_settings || s_pending_biz_update) {
+    if (s_has_pending_settings) {
+      s_settings = s_pending_settings;
+      s_has_pending_settings = false;
+      save_settings();
+      evaluate_context_modes();
+    }
+    s_active_biz_mode = is_biz_mode;
+    s_pending_biz_update = false;
+    persist_write_bool(PERSIST_KEY_ACTIVE_BIZ, s_active_biz_mode);
+
+    apply_theme_colors();
+    GRect unob = layer_get_unobstructed_bounds(window_get_root_layer(s_main_window));
+    adjust_layout(unob.size.h);
+  }
 }
 
 static void handle_battery(BatteryChargeState state) { s_last_battery = state; layer_mark_dirty(s_canvas_layer); }
 
-static void update_info() {
+static void update_info(void) {
   time_t temp = time(NULL); struct tm *tick = localtime(&temp);
   static char s_h[4], s_m[4], s_d[16];
   
@@ -946,48 +874,18 @@ static void handle_tick(struct tm *tick, TimeUnits units) {
   }
   
   //スリープモードじゃなくて、バイブ設定がONなら鳴らす！
-if (is_chime_time && !is_sleep_mode) {
+  if (is_chime_time && !is_sleep_mode) {
     //前回鳴らしてから50秒以上経過している時だけ許可！
     if (time(NULL) - s_last_chime_time > 50) {
       if (current_vibe_mode == 0 || current_vibe_mode == 1) {
-        vibes_short_pulse();
+        blade_ctrl_vibe_short_pulse_safe();
         s_last_chime_time = time(NULL); // 💡 ここで時間をメモ！
-        // モーター振動の誤検知だけをピンポイントで防ぐ（700msだけタップをブロック）
-        s_block_tap_from_vibe = true;
-        if (s_unblock_tap_timer) {
-          app_timer_cancel(s_unblock_tap_timer);
-        }
-        s_unblock_tap_timer = app_timer_register(700, unblock_tap_cb, NULL);
       }
     }
   }
 
-  //アニメーション制御
-  if (s_pending_biz_update) {
-    if (s_in_focus) trigger_shutter_internal(false); //見えてる時だけ！
-    else update_info(); // 見えない時は裏で時間だけ進めて「おあずけ」！
-  } else if (!s_active_biz_mode) {
-    bool should_animate = false;
-
-    // モード0 (Full): anim_freq間隔、またはインターバルチャイム時
-    if (s_settings.anim_mode == 0) {
-      if ((s_settings.anim_freq > 0 && tick->tm_min % s_settings.anim_freq == 0) || is_chime_time) {
-        should_animate = true;
-      }
-    }
-    // モード1 (Interval Only): インターバルタイマー時のみアニメーション
-    else if (s_settings.anim_mode == 1 && is_chime_time) {
-      should_animate = true;
-    }
-
-    if (should_animate && s_in_focus) {
-      trigger_shutter_internal(false);
-    } else {
-      update_info();
-    }
-  } else {
-    update_info(); 
-  }
+  // ブレードのアニメーション制御・情報更新の振り分け
+  blade_ctrl_handle_tick(tick->tm_min, is_chime_time);
 
   if (tick->tm_min == 0) {
     DictionaryIterator *iter; app_message_outbox_begin(&iter);
@@ -1058,51 +956,6 @@ static void unobstructed_did_change(void *context) {
   adjust_layout(unob.size.h); layer_mark_dirty(s_canvas_layer);
 }
 #endif
-
-static GColor get_wing_fill_color(int wing_index) {
-  // 🏢 ビジネスモード用の羽の色強制上書き
-  if (s_active_biz_mode) {
-    switch (s_settings.biz_theme) {
-      case 0: return GColorBlack; // 黒背景 / 黒羽
-      case 1: return GColorWhite; // 黒背景 / 白羽 (全部真っ白！)
-      case 2: return GColorWhite; // 白背景 / 白羽
-      case 3: return GColorBlack; // 白背景 / 黒羽 (全部真っ黒！)
-    }
-  }
-
-  int pct = s_last_battery.charge_percent;
-  int seq = (8 - wing_index + 12) % 12; 
-  bool is_empty = false;
-  
-  if (s_settings.shutter_color_mode != 5 && s_settings.shutter_color_mode != 6 && s_settings.battery_color_sync) {
-    int full_blades = (pct >= 50) ? 12 : (pct * 12) / 50;
-    if (seq < (12 - full_blades)) is_empty = true;
-  }
-
-  if (is_empty) return (s_settings.theme == 0) ? GColorLightGray : GColorDarkGray;
-
-  switch (s_settings.shutter_color_mode) {
-    case 0: return GColorBlack;
-    case 1: return GColorWhite;
-    case 2: return s_settings.custom_shutter_color;
-    case 3: { 
-      static const GColor rainbow[12] = {GColorYellow, GColorIcterine, GColorKellyGreen, GColorIslamicGreen, GColorCyan, GColorBlue, GColorDukeBlue, GColorPurple, GColorMagenta, GColorRed, GColorOrange, GColorChromeYellow};
-      return rainbow[wing_index];
-    }
-    case 4: { 
-      static const GColor pastel[12] = {GColorPastelYellow, GColorRajah, GColorInchworm, GColorMintGreen, GColorCeleste, GColorBabyBlueEyes, GColorElectricBlue, GColorLavenderIndigo, GColorRichBrilliantLavender, GColorBrilliantRose, GColorMelon, GColorChromeYellow};
-      return pastel[wing_index];
-    }
-    case 5: 
-      if (pct > 80) return GColorIslamicGreen; else if (pct > 50) return GColorKellyGreen;
-      else if (pct > 25) return GColorYellow; else if (pct > 5) return GColorOrange; else return GColorRed;
-    case 6: 
-      if (pct > 80) return GColorMintGreen; else if (pct > 50) return GColorInchworm;
-      else if (pct > 25) return GColorPastelYellow; else if (pct > 5) return GColorMelon; else return GColorBrilliantRose;
-    default:
-      return GColorBlack; 
-  }
-}
 
 static void draw_weather_icon_raw(GContext *ctx, GPoint center, GColor color, WeatherStatus status) {
   graphics_context_set_fill_color(ctx, color); graphics_context_set_stroke_color(ctx, color);
@@ -1191,35 +1044,13 @@ static void update_proc(Layer *layer, GContext *ctx) {
   }
 #endif
 
-  float ev = (s_progress > 1.0) ? (2.0 - s_progress) : s_progress;
-  
   //ビジネスモードなら設定を上書きする
   int current_mode = s_active_biz_mode ? s_settings.biz_face : s_settings.watchface_mode;
   int current_shutter = s_active_biz_mode ? s_settings.biz_shutter : s_settings.shutter_thick;
 
-  int max_r = b.size.w / 2, base_r;
-  if (PBL_IF_ROUND_ELSE(true, false)) {
-    int wide_r = max_r - (max_r / 9); 
-    int step = max_r / 7;
-    if (current_shutter == 0) base_r = (int)(wide_r * 0.9659f);
-    else if (current_shutter == 1) base_r = (int)((wide_r - step) * 0.9659f);
-    else base_r = (int)((wide_r - step * 2) * 0.9659f);
-  } else {
-    #if defined(PBL_PLATFORM_EMERY)
-      if (current_shutter == 0) base_r = 110;
-      else if (current_shutter == 1) base_r = 94;
-      else base_r = 76;
-    #else
-      if (current_shutter == 0) base_r = 81;
-      else if (current_shutter == 1) base_r = 68;
-      else base_r = 55;
-    #endif
-  }
+  int r = blade_ctrl_get_aperture_radius(b.size.w, current_shutter);
 
-  int r = (int)(base_r / 0.9659f * (1.0f - ev)); 
-  int32_t angle = (int32_t)(ev * TRIG_MAX_ANGLE / 8); 
-
-  graphics_context_set_antialiased(ctx, !s_is_animating);
+  graphics_context_set_antialiased(ctx, !blade_ctrl_is_animating());
 
 //文字色・針色を「背景と同化しない高コントラスト」に設定する
   GColor txt_color;
@@ -1236,10 +1067,41 @@ static void update_proc(Layer *layer, GContext *ctx) {
   int32_t min_angle = TRIG_MAX_ANGLE * t->tm_min / 60;
   int32_t hour_angle = TRIG_MAX_ANGLE * (((t->tm_hour % 12) * 60) + t->tm_min) / 720;
 
+  // --- 奥のコンテンツ描画（文字・針） ---
+  // ブレード（シャッター羽）の手前に描画しておくことで、ブレードが最前面として被さりながら閉じる
+  graphics_context_set_fill_color(ctx, txt_color);
+  graphics_context_set_stroke_color(ctx, txt_color);
+  graphics_context_set_text_color(ctx, txt_color);
 
-  //アナログの針
-  if (current_mode == 1 && r > 40) {
+  if (current_mode == 0) {
+    // デジタル時計モード
+    int f_h = s_current_f_size;
+    int char_spacing = f_h / 2; 
+    int gap = (f_h / 15 < 2) ? 2 : (f_h / 15);
+    int c1 = c.x - (gap / 2) - (char_spacing / 2);
+    int c2 = c.x + (gap / 2) + (char_spacing / 2);
+    int cx[4] = {c1 - char_spacing, c1, c2, c2 + char_spacing};
+    int text_y = c.y - (f_h / 2) - (f_h / 6);
     
+    for (int i = 0; i < 4; i++) {
+      draw_text_styled(ctx, s_time_chars[i], s_time_font, GRect(cx[i] - (f_h / 2), text_y, f_h, f_h + 20), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
+    }
+
+    // デジタル上下の補助情報（開口部が通常表示サイズ付近の基準位置）
+    int line_top_y = c.y - (r / 2); int line_bottom_y = c.y + (r / 2);
+
+    draw_text_styled(ctx, s_date_str, s_info_font, GRect(0, line_top_y - 12, b.size.w, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
+    int info_y = line_bottom_y - 2;
+    int boot_x = c.x - 44; 
+    draw_boot_icon(ctx, boot_x, info_y, txt_color, s_settings.text_style);
+
+    draw_text_styled(ctx, s_steps_str, s_info_font, GRect(c.x - 30, info_y - 2, 45, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
+    draw_weather_icon(ctx, (GPoint){c.x + 16, info_y + 4}, txt_color, s_settings.weather, s_settings.text_style);
+    draw_text_styled(ctx, "/", s_info_font, GRect(c.x + 24, info_y - 2, 10, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
+    draw_weather_icon(ctx, (GPoint){c.x + 36, info_y + 4}, txt_color, s_settings.tomorrow_weather, s_settings.text_style);
+
+  } else {
+    // アナログ時計モード（針＋情報）
     int safe_r = 36; 
     int h_orbit_r = safe_r + (r - safe_r) / 2;
     
@@ -1286,80 +1148,34 @@ static void update_proc(Layer *layer, GContext *ctx) {
     graphics_context_set_stroke_color(ctx, h_color);
     graphics_context_set_stroke_width(ctx, 6); 
     graphics_draw_line(ctx, h_p_start, h_p_end); 
+
+    // アナログ補助情報
+    int top_steps_y = c.y - 27; 
+    int mid_date_y  = c.y - 8;  
+    int bot_weather_y = c.y + 11; 
+
+    int boot_x = c.x - 22; 
+    draw_boot_icon(ctx, boot_x, top_steps_y + 2, txt_color, s_settings.text_style);
+    draw_text_styled(ctx, s_steps_str, s_info_font, GRect(boot_x + 14, top_steps_y, 40, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
+
+    draw_text_styled(ctx, s_date_str, s_info_font, GRect(0, mid_date_y, b.size.w, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
+
+    draw_weather_icon(ctx, (GPoint){c.x - 10, bot_weather_y + 6}, txt_color, s_settings.weather, s_settings.text_style);
+    draw_text_styled(ctx, "/", s_info_font, GRect(c.x - 4, bot_weather_y, 10, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
+    draw_weather_icon(ctx, (GPoint){c.x + 10, bot_weather_y + 6}, txt_color, s_settings.tomorrow_weather, s_settings.text_style);
   }
 
-  graphics_context_set_stroke_width(ctx, 1);
-
-  // --- シャッター羽の描画 ---
-  for (int i = 0; i < 12; i++) {
-    GColor fill = get_wing_fill_color(i);
-    graphics_context_set_fill_color(ctx, fill);
-
-    GColor stroke = gcolor_legible_over(fill); 
-    if (PBL_IF_COLOR_ELSE(true, false)) {
-      if (gcolor_equal(stroke, GColorBlack)) stroke = GColorDarkGray;
-      else stroke = GColorLightGray;
-    }
-    graphics_context_set_stroke_color(ctx, stroke);
-
-    s_dynamic_path->points[0] = get_inner_vertex(i, r, angle, c);
-    s_dynamic_path->points[1] = get_ray_far_point(i, r, angle, c);
-    s_dynamic_path->points[2] = get_ray_far_point(i + 1, r, angle, c);
-    s_dynamic_path->points[3] = get_inner_vertex(i + 1, r, angle, c);
-    
-    gpath_draw_filled(ctx, s_dynamic_path); 
-    gpath_draw_outline(ctx, s_dynamic_path);
-  }
-
-  // --- 手前のテキスト描画エリア ---
-  if (r > 40) {
-    graphics_context_set_fill_color(ctx, txt_color);
-    graphics_context_set_stroke_color(ctx, txt_color);
-    graphics_context_set_text_color(ctx, txt_color);
-    
-    if (current_mode == 0) {
-      // デジタル時計モード
-      int f_h = s_current_f_size;
-      int char_spacing = f_h / 2; 
-      int gap = (f_h / 15 < 2) ? 2 : (f_h / 15);
-      int c1 = c.x - (gap / 2) - (char_spacing / 2);
-      int c2 = c.x + (gap / 2) + (char_spacing / 2);
-      int cx[4] = {c1 - char_spacing, c1, c2, c2 + char_spacing};
-      int text_y = c.y - (f_h / 2) - (f_h / 6);
-      
-      for (int i = 0; i < 4; i++) {
-        draw_text_styled(ctx, s_time_chars[i], s_time_font, GRect(cx[i] - (f_h / 2), text_y, f_h, f_h + 20), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
-      }
-
-      int line_top_y = c.y - (r / 2); int line_bottom_y = c.y + (r / 2);
-
-      draw_text_styled(ctx, s_date_str, s_info_font, GRect(0, line_top_y - 12, b.size.w, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
-      int info_y = line_bottom_y - 2;
-      int boot_x = c.x - 44; 
-      draw_boot_icon(ctx, boot_x, info_y, txt_color, s_settings.text_style);
-
-      draw_text_styled(ctx, s_steps_str, s_info_font, GRect(c.x - 30, info_y - 2, 45, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
-      draw_weather_icon(ctx, (GPoint){c.x + 16, info_y + 4}, txt_color, s_settings.weather, s_settings.text_style);
-      draw_text_styled(ctx, "/", s_info_font, GRect(c.x + 24, info_y - 2, 10, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
-      draw_weather_icon(ctx, (GPoint){c.x + 36, info_y + 4}, txt_color, s_settings.tomorrow_weather, s_settings.text_style);
-
-    } else {
-      // アナログ時計モード
-      int top_steps_y = c.y - 27; 
-      int mid_date_y  = c.y - 8;  
-      int bot_weather_y = c.y + 11; 
-
-      int boot_x = c.x - 22; 
-      draw_boot_icon(ctx, boot_x, top_steps_y + 2, txt_color, s_settings.text_style);
-      draw_text_styled(ctx, s_steps_str, s_info_font, GRect(boot_x + 14, top_steps_y, 40, 15), GTextOverflowModeFill, GTextAlignmentLeft, txt_color, s_settings.text_style);
-
-      draw_text_styled(ctx, s_date_str, s_info_font, GRect(0, mid_date_y, b.size.w, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
-
-      draw_weather_icon(ctx, (GPoint){c.x - 10, bot_weather_y + 6}, txt_color, s_settings.weather, s_settings.text_style);
-      draw_text_styled(ctx, "/", s_info_font, GRect(c.x - 4, bot_weather_y, 10, 15), GTextOverflowModeFill, GTextAlignmentCenter, txt_color, s_settings.text_style);
-      draw_weather_icon(ctx, (GPoint){c.x + 10, bot_weather_y + 6}, txt_color, s_settings.tomorrow_weather, s_settings.text_style);
-    }
-  }
+  // --- 【最前面】シャッター羽（ブレード）の描画 ---
+  BladeRenderConfig blade_render_cfg = {
+    .is_biz_mode = s_active_biz_mode,
+    .biz_theme = s_settings.biz_theme,
+    .theme = s_settings.theme,
+    .shutter_color_mode = s_settings.shutter_color_mode,
+    .custom_color = s_settings.custom_shutter_color,
+    .battery_color_sync = s_settings.battery_color_sync,
+    .battery_pct = s_last_battery.charge_percent
+  };
+  blade_ctrl_draw(ctx, c, r, &blade_render_cfg);
 }
 
 static void main_window_load(Window *window) {
@@ -1368,7 +1184,15 @@ static void main_window_load(Window *window) {
   s_canvas_layer = layer_create(fb); 
   layer_set_update_proc(s_canvas_layer, update_proc); 
   layer_add_child(wl, s_canvas_layer);
-  s_dynamic_path = gpath_create(&s_path_info);
+
+  static const BladeCallbacks s_blade_callbacks = {
+    .get_anim_config = get_blade_anim_config,
+    .on_closed_midpoint = on_blade_closed_midpoint,
+    .on_update_no_anim = update_info,
+    .on_focus_gained = evaluate_context_modes
+  };
+  blade_ctrl_init(s_canvas_layer, &s_blade_callbacks);
+
 #if !defined(PBL_PLATFORM_APLITE)
   unobstructed_area_service_unsubscribe(); 
   unobstructed_area_service_subscribe((UnobstructedAreaHandlers) { .did_change = unobstructed_did_change }, NULL);
@@ -1385,39 +1209,14 @@ static void main_window_load(Window *window) {
   update_info();
 }
 
-// 遅延シャッター関数（トースト通知が消えた直後に起動）
-static void delayed_shutter_cb(void *data) {
-  s_delayed_shutter_timer = NULL;
-  if (s_pending_biz_update) {
-    trigger_shutter_internal(false);
-  }
-}
-
-// 修正版フォーカス監視
-static void focus_handler(bool in_focus) {
-  s_in_focus = in_focus;
-  
-  if (in_focus) {
-    evaluate_context_modes();
-    
-    // モード切り替えがある場合、ポップアップが消えたら間髪を容れずスッと変形（150ms）
-    if (s_pending_biz_update) {
-      if (s_delayed_shutter_timer) app_timer_cancel(s_delayed_shutter_timer);
-      s_delayed_shutter_timer = app_timer_register(150, delayed_shutter_cb, NULL); 
-    }
-  }
-}
-
 static void main_window_unload(Window *window) {
-  if (s_unblock_tap_timer) { app_timer_cancel(s_unblock_tap_timer); s_unblock_tap_timer = NULL; }
-  if (s_anim_timer) { app_timer_cancel(s_anim_timer); s_anim_timer = NULL; }
-  if (s_delayed_shutter_timer) { app_timer_cancel(s_delayed_shutter_timer); s_delayed_shutter_timer = NULL; }
+  blade_ctrl_deinit();
 #if defined(PBL_COLOR)
   unload_bg_bitmap();
 #endif
   if (s_time_font) fonts_unload_custom_font(s_time_font); 
   fonts_unload_custom_font(s_info_font);
-  gpath_destroy(s_dynamic_path); layer_destroy(s_canvas_layer);
+  layer_destroy(s_canvas_layer);
 #if !defined(PBL_PLATFORM_APLITE)
   unobstructed_area_service_unsubscribe(); 
 #endif
@@ -1435,20 +1234,14 @@ int main(void) {
   }); 
   window_stack_push(s_main_window, true);
   
-  accel_tap_service_subscribe(handle_tap); 
+  blade_ctrl_subscribe_events();
   tick_timer_service_subscribe(MINUTE_UNIT, handle_tick); 
   battery_state_service_subscribe(handle_battery);
   
-  //画面フォーカスの監視を開始する
-  app_focus_service_subscribe(focus_handler);
-  
   app_event_loop();
   
-  //終了時に監視を解除する
-  app_focus_service_unsubscribe();
-  
+  blade_ctrl_unsubscribe_events();
   battery_state_service_unsubscribe(); 
   tick_timer_service_unsubscribe(); 
-  accel_tap_service_unsubscribe(); 
   window_destroy(s_main_window);
 }
