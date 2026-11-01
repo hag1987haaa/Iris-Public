@@ -534,6 +534,21 @@ module.exports = function(minified) {
       initCropper('bg_normal_container', 'Normal Background Image');
       initCropper('bg_biz_container', 'Business Background Image');
 
+      // 通常背景スタイルの連動（Custom Photo 選択時のみ画像アップローダーを表示）
+      var themeSelect = clayConfig.getItemByMessageKey && clayConfig.getItemByMessageKey('Theme');
+      if (themeSelect) {
+        var normBox = document.getElementById('bg_normal_container');
+        var normSection = normBox ? normBox.closest('.section') : null;
+        function updateNormalVisibility() {
+          var val = themeSelect.get();
+          var isPhoto = (val === '2' || val === 2);
+          if (normBox) normBox.style.display = isPhoto ? 'block' : 'none';
+          if (normSection) normSection.style.display = isPhoto ? 'block' : 'none';
+        }
+        themeSelect.on('change', updateNormalVisibility);
+        updateNormalVisibility();
+      }
+
       // ビジネス背景スタイルの連動
       var bizBgSelect = clayConfig.getItemByMessageKey && clayConfig.getItemByMessageKey('BizBgMode');
       if (bizBgSelect) {

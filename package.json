@@ -41,6 +41,8 @@
             "BizVibeMode",
             "RequestSettings",
             "TextStyle",
+            "TextColor",
+            "BizTextColor",
             "BizBgMode",
             "BgImageTarget",
             "BgImageChunkIdx",

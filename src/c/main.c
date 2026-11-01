@@ -5,7 +5,7 @@
 #define PERSIST_KEY_SETTINGS 1
 #define PERSIST_KEY_ACTIVE_BIZ 2
 #define PERSIST_KEY_SETTINGS_VERSION 100
-#define CURRENT_SETTINGS_VERSION 4
+#define CURRENT_SETTINGS_VERSION 6
 
 typedef enum { WeatherClear, WeatherCloudy, WeatherRainy, WeatherSnowy, WeatherThunder } WeatherStatus;
 
@@ -18,6 +18,8 @@ typedef struct {
   int biz_days; int biz_chime_interval; int biz_vibe_mode;
   int text_style;  // 0: Flat, 1: Drop Shadow, 2: Outline
   int biz_bg_mode; // 0: None (Solid), 1: Same as Normal, 2: Biz Image
+  int text_color;  // 0: Auto (Invert Bg), 1: Black, 2: White
+  int biz_text_color; // 0: Auto (Invert Bg), 1: Black, 2: White
 } ClaySettings;
 
 static ClaySettings s_settings;
@@ -79,13 +81,15 @@ static void get_default_settings(ClaySettings *settings) {
     .biz_chime_interval = 60, // Every 1 Hour
     .biz_vibe_mode = 1,       // Periodic Only
     .text_style = 0,          // Flat
-    .biz_bg_mode = 0          // None (Solid)
+    .biz_bg_mode = 0,         // None (Solid)
+    .text_color = 0,          // Auto (Invert Bg)
+    .biz_text_color = 0       // Auto (Invert Bg)
   };
 }
 
 static void sanitize_settings(ClaySettings *s) {
   if (s->watchface_mode < 0 || s->watchface_mode > 1) s->watchface_mode = 0;
-  if (s->theme < 0 || s->theme > 1) s->theme = 0;
+  if (s->theme < 0 || s->theme > 2) s->theme = 0;
   if (s->anim_speed < 10 || s->anim_speed > 100) s->anim_speed = 40;
   if (s->anim_freq < 0 || s->anim_freq > 60) s->anim_freq = 1;
   if (s->anim_mode < 0 || s->anim_mode > 3) s->anim_mode = 0;
@@ -102,13 +106,15 @@ static void sanitize_settings(ClaySettings *s) {
   if (s->biz_end_h < 0 || s->biz_end_h > 23) s->biz_end_h = 18;
   if (s->biz_face < 0 || s->biz_face > 1) s->biz_face = 1;
   if (s->biz_theme < 0 || s->biz_theme > 3) s->biz_theme = 0;
-  if (s->biz_shutter < 0 || s->biz_shutter > 1) s->biz_shutter = 0;
+  if (s->biz_shutter < 0 || s->biz_shutter > 2) s->biz_shutter = 0;
   if (s->chime_interval <= 0 || s->chime_interval > 60) s->chime_interval = 60;
   if (s->biz_days < 0 || s->biz_days > 1) s->biz_days = 1;
   if (s->biz_chime_interval <= 0 || s->biz_chime_interval > 60) s->biz_chime_interval = 60;
   if (s->biz_vibe_mode < 0 || s->biz_vibe_mode > 3) s->biz_vibe_mode = 1;
   if (s->text_style < 0 || s->text_style > 2) s->text_style = 0;
   if (s->biz_bg_mode < 0 || s->biz_bg_mode > 2) s->biz_bg_mode = 0;
+  if (s->text_color < 0 || s->text_color > 2) s->text_color = 0;
+  if (s->biz_text_color < 0 || s->biz_text_color > 2) s->biz_text_color = 0;
 }
 
 #if defined(PBL_COLOR)
@@ -450,7 +456,13 @@ static void request_bg_image_from_phone(int target) {
 
 static void check_and_request_missing_bg(void) {
   int needed_target = -1;
-  if (!s_active_biz_mode || s_settings.biz_bg_mode == 1) {
+  if (!s_active_biz_mode) {
+    if (s_settings.theme == 2) {
+      needed_target = 0;
+    } else {
+      return; // Theme == 0 (Solid White) / 1 (Solid Black): 写真は要求しない
+    }
+  } else if (s_settings.biz_bg_mode == 1) {
     needed_target = 0;
   } else if (s_settings.biz_bg_mode == 2) {
     needed_target = 1;
@@ -508,7 +520,7 @@ static void apply_theme_colors() {
     // ビジネスモード時の背景色強制上書き
     bg = (s_settings.biz_theme == 0 || s_settings.biz_theme == 1) ? GColorBlack : GColorWhite;
   } else {
-    // 通常時の背景色
+    // 通常時の背景色（Theme 0: White, Theme 1: Black, Theme 2: Custom Photo -> 透過下地は黒）
     bg = (s_settings.theme == 0) ? GColorWhite : GColorBlack;
   }
   window_set_background_color(s_main_window, bg);
@@ -600,6 +612,8 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
       dict_write_int32(out_iter, MESSAGE_KEY_BizVibeMode, s_settings.biz_vibe_mode);
       dict_write_int32(out_iter, MESSAGE_KEY_TextStyle, s_settings.text_style);
       dict_write_int32(out_iter, MESSAGE_KEY_BizBgMode, s_settings.biz_bg_mode);
+      dict_write_int32(out_iter, MESSAGE_KEY_TextColor, s_settings.text_color);
+      dict_write_int32(out_iter, MESSAGE_KEY_BizTextColor, s_settings.biz_text_color);
 
       app_message_outbox_send();
     }
@@ -738,6 +752,8 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   if((t=dict_find(iter, MESSAGE_KEY_BizVibeMode))) s_pending_settings.biz_vibe_mode = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_TextStyle))) s_pending_settings.text_style = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_BizBgMode))) s_pending_settings.biz_bg_mode = get_dict_int(t);
+  if((t=dict_find(iter, MESSAGE_KEY_TextColor))) s_pending_settings.text_color = get_dict_int(t);
+  if((t=dict_find(iter, MESSAGE_KEY_BizTextColor))) s_pending_settings.biz_text_color = get_dict_int(t);
   
   sanitize_settings(&s_pending_settings);
   blade_ctrl_trigger(false);
@@ -1027,7 +1043,7 @@ static void update_proc(Layer *layer, GContext *ctx) {
   bool should_draw_bg = false;
   if (s_bg_bitmap != NULL && s_is_rx_complete) {
     if (!s_active_biz_mode) {
-      if (s_current_loaded_target == 0) should_draw_bg = true;
+      if (s_settings.theme == 2 && s_current_loaded_target == 0) should_draw_bg = true;
     } else {
       if (s_settings.biz_bg_mode == 1 && s_current_loaded_target == 0) {
         should_draw_bg = true;
@@ -1055,11 +1071,23 @@ static void update_proc(Layer *layer, GContext *ctx) {
 //文字色・針色を「背景と同化しない高コントラスト」に設定する
   GColor txt_color;
   if (s_active_biz_mode) {
-    // テーマ0,1 は黒背景 - だから文字は「白」にする！
-    // テーマ2,3 は白背景 - だから文字は「黒」にする！
-    txt_color = (s_settings.biz_theme <= 1) ? GColorWhite : GColorBlack;
+    if (s_settings.biz_text_color == 1) {
+      txt_color = GColorBlack;
+    } else if (s_settings.biz_text_color == 2) {
+      txt_color = GColorWhite;
+    } else {
+      // 0: Auto (テーマ0,1は黒背景->白文字、テーマ2,3は白背景->黒文字)
+      txt_color = (s_settings.biz_theme <= 1) ? GColorWhite : GColorBlack;
+    }
   } else {
-    txt_color = (s_settings.theme == 0 || s_settings.theme == 2) ? GColorBlack : GColorWhite;
+    if (s_settings.text_color == 1) {
+      txt_color = GColorBlack;
+    } else if (s_settings.text_color == 2) {
+      txt_color = GColorWhite;
+    } else {
+      // 0: Auto (背景色に応じて反転。Theme 0: 白背景->黒文字、Theme 1, 2: 黒背景/写真->白文字)
+      txt_color = (s_settings.theme == 0) ? GColorBlack : GColorWhite;
+    }
   }
 
   time_t temp = time(NULL);

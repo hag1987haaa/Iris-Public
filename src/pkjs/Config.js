@@ -42,11 +42,35 @@ module.exports = [
       {
         "type": "select",
         "messageKey": "Theme",
-        "label": "Background Color",
+        "label": "Background Style",
+        "defaultValue": "0",
+        "capabilities": ["COLOR"],
+        "options": [
+          { "label": "Solid White", "value": "0" },
+          { "label": "Solid Black", "value": "1" },
+          { "label": "Custom Photo (Image)", "value": "2" }
+        ]
+      },
+      {
+        "type": "select",
+        "messageKey": "Theme",
+        "label": "Background Style",
+        "defaultValue": "0",
+        "capabilities": ["BW"],
+        "options": [
+          { "label": "Solid White", "value": "0" },
+          { "label": "Solid Black", "value": "1" }
+        ]
+      },
+      {
+        "type": "select",
+        "messageKey": "TextColor",
+        "label": "Text / Hand Color",
         "defaultValue": "0",
         "options": [
-          { "label": "White", "value": "0" },
-          { "label": "Black", "value": "1" }
+          { "label": "Auto (Invert Background)", "value": "0" },
+          { "label": "Black", "value": "1" },
+          { "label": "White", "value": "2" }
         ]
       },
       {
@@ -175,14 +199,14 @@ module.exports = [
       {
         "type": "select",
         "messageKey": "VibeMode",
-        "label": "Vibration Mode",
-        "description": "Vibrations are paused during Quiet Time so you won't be disturbed.",
+        "label": "Periodic Vibration Mode",
+        "description": "Choose vibration feedback. Pauses automatically during Sleep Mode / Quiet Time outside business hours.",
         "defaultValue": "2",
         "options": [
           { "label": "Shake & Periodic Vibration", "value": "0" },
           { "label": "Periodic Vibration Only", "value": "1" },
           { "label": "Shake Only", "value": "2" },
-          { "label": "Disabled", "value": "3" }
+          { "label": "Disabled (Off)", "value": "3" }
         ]
       },
       {
@@ -273,10 +297,11 @@ module.exports = [
         "defaultValue": "0",
         "options": [
           { "label": "Wide", "value": "0" },
-          { "label": "Medium", "value": "1" }
+          { "label": "Medium", "value": "1" },
+          { "label": "Narrow", "value": "2" }
         ]
       },
-			{
+      {
         "type": "select",
         "messageKey": "BizTheme",
         "label": "Theme (Bg / Blades)",
@@ -287,6 +312,17 @@ module.exports = [
           { "label": "Black / White", "value": "1" },
           { "label": "White / White", "value": "2" },
           { "label": "White / Black", "value": "3" }
+        ]
+      },
+      {
+        "type": "select",
+        "messageKey": "BizTextColor",
+        "label": "Text / Hand Color",
+        "defaultValue": "0",
+        "options": [
+          { "label": "Auto (Invert Background)", "value": "0" },
+          { "label": "Black", "value": "1" },
+          { "label": "White", "value": "2" }
         ]
       },
       {
@@ -308,31 +344,30 @@ module.exports = [
         "capabilities": ["COLOR"],
         "defaultValue": "<div id='bg_biz_container'></div>"
       },
-{
+      {
+        "type": "select",
+        "messageKey": "BizVibeMode",
+        "label": "Business Vibration Mode",
+        "description": "Wrist shake is disabled during business hours to maintain a quiet, professional demeanor.",
+        "defaultValue": "1",
+        "options": [
+          { "label": "Periodic Vibration Only", "value": "1" },
+          { "label": "Disabled (Off / Mute)", "value": "3" }
+        ]
+      },
+      {
         "type": "select",
         "messageKey": "BizChimeInterval",
-        "label": "Business Vibration Interval", // 💡 ChimeをVibrationに変更！
-        "description": "How often the watch gently vibrates during business hours.", // 💡 「仕事中にどれくらいの頻度で優しく振動するか」に変更！
+        "label": "Business Vibration Interval",
+        "description": "How often the watch gently vibrates during business hours.",
         "defaultValue": "60",
         "options": [
           { "label": "Every 5 Minutes", "value": "5" },
           { "label": "Every 10 Minutes", "value": "10" },
           { "label": "Every 15 Minutes", "value": "15" },
-          { "label": "Every 20 Minutes", "value": "20" }, // 💡 25分を20分に変更！
+          { "label": "Every 20 Minutes", "value": "20" },
           { "label": "Every 30 Minutes", "value": "30" },
           { "label": "Every 1 Hour", "value": "60" }
-        ]
-      },
-      {
-        "type": "select",
-        "messageKey": "BizVibeMode",
-        "label": "Business Vibration Mode",
-        "defaultValue": "1",
-        "options": [
-          { "label": "Shake & Periodic Vibration", "value": "0" },
-          { "label": "Periodic Vibration Only", "value": "1" },
-          { "label": "Shake Only", "value": "2" },
-          { "label": "Disabled", "value": "3" }
         ]
       }
     ]
