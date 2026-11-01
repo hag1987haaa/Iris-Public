@@ -141,6 +141,10 @@ static int s_current_loaded_target = -1; // -1: none, 0: normal, 1: biz
 static size_t s_image_rx_bytes = 0;
 static bool s_is_rx_complete = false;
 static bool s_is_full_res_loaded = false;
+static bool s_pending_bg_swap = false;
+static int s_pending_swap_target = 0;
+static int s_pending_swap_w = 144;
+static int s_pending_swap_h = 168;
 static AppTimer *s_bg_req_retry_timer = NULL;
 static AppTimer *s_rx_watchdog_timer = NULL;
 static int s_pending_req_target = 0;
@@ -647,20 +651,16 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
 
     if (chunk_idx == 0) {
       s_image_rx_bytes = 0;
+      s_is_rx_complete = false; // 受信中は書きかけのデータを出さない
       if (s_bg_bitmap != NULL) {
         GSize cur_size = gbitmap_get_bounds(s_bg_bitmap).size;
         if (cur_size.w != width || cur_size.h != height) {
           gbitmap_destroy(s_bg_bitmap);
           s_bg_bitmap = NULL;
-          s_is_rx_complete = false;
         }
       }
       if (s_bg_bitmap == NULL) {
         s_bg_bitmap = gbitmap_create_blank(GSize(width, height), GBitmapFormat8Bit);
-        s_is_rx_complete = false;
-      }
-      if (s_current_loaded_target != target) {
-        s_is_rx_complete = false;
       }
     }
 
@@ -680,23 +680,15 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
           app_timer_cancel(s_rx_watchdog_timer);
           s_rx_watchdog_timer = NULL;
         }
-        bool was_already_visible = s_is_rx_complete && (s_current_loaded_target == target);
-        s_is_rx_complete = true;
-        s_is_full_res_loaded = true;
-        s_current_loaded_target = target;
         s_image_rx_bytes = 0;
 
-        // 通常背景（target == 0）は時計本体のフラッシュ（persist）に高密度4bitキャッシュを保存！
-        if (target == 0) {
-          save_bg_cache_to_persist(width, height);
-        }
+        // すぐに画面を書き換えず、まずブレードを閉じるアニメーションを発動！
+        s_pending_bg_swap = true;
+        s_pending_swap_target = target;
+        s_pending_swap_w = width;
+        s_pending_swap_h = height;
 
-        if (s_canvas_layer) {
-          layer_mark_dirty(s_canvas_layer);
-        }
-        if (!was_already_visible) {
-          blade_ctrl_trigger(false);
-        }
+        blade_ctrl_trigger(false);
       }
     }
     #endif
@@ -806,17 +798,31 @@ static void get_blade_anim_config(BladeAnimConfig *out_cfg) {
   out_cfg->vibe_mode = s_settings.vibe_mode;
   out_cfg->is_sleep_mode = is_sleep_mode;
   out_cfg->is_biz_mode = s_active_biz_mode;
-  out_cfg->has_pending_swap = (s_pending_biz_update || s_has_pending_settings);
-  out_cfg->has_pending_biz = s_pending_biz_update;
 #if defined(PBL_COLOR)
+  out_cfg->has_pending_swap = (s_pending_biz_update || s_has_pending_settings || s_pending_bg_swap);
   out_cfg->block_tap_external = (s_image_rx_bytes > 0);
 #else
+  out_cfg->has_pending_swap = (s_pending_biz_update || s_has_pending_settings);
   out_cfg->block_tap_external = false;
 #endif
+  out_cfg->has_pending_biz = s_pending_biz_update;
 }
 
 static void on_blade_closed_midpoint(void) {
   update_info();
+
+#if defined(PBL_COLOR)
+  // ブレードが完全に閉まりきった瞬間に新画像を表示フラグON＆永続キャッシュ保存！
+  if (s_pending_bg_swap) {
+    s_is_rx_complete = true;
+    s_is_full_res_loaded = true;
+    s_current_loaded_target = s_pending_swap_target;
+    s_pending_bg_swap = false;
+    if (s_pending_swap_target == 0) {
+      save_bg_cache_to_persist(s_pending_swap_w, s_pending_swap_h);
+    }
+  }
+#endif
 
   // 設定すり替えまたはビジネスモード切り替え時のマジック変形！
   if (s_has_pending_settings || s_pending_biz_update) {
@@ -833,6 +839,10 @@ static void on_blade_closed_midpoint(void) {
     apply_theme_colors();
     GRect unob = layer_get_unobstructed_bounds(window_get_root_layer(s_main_window));
     adjust_layout(unob.size.h);
+  }
+
+  if (s_canvas_layer) {
+    layer_mark_dirty(s_canvas_layer);
   }
 }
 
@@ -1035,12 +1045,10 @@ static void update_proc(Layer *layer, GContext *ctx) {
     if (!s_active_biz_mode) {
       if (s_settings.theme == 2 && s_current_loaded_target == 0) should_draw_bg = true;
     } else {
-      if (s_settings.biz_bg_mode == 1 && s_current_loaded_target == 0) {
-        should_draw_bg = true;
-      } else if (s_settings.biz_bg_mode == 2 && s_current_loaded_target == 1) {
+      if (s_settings.biz_bg_mode == 2 && s_settings.theme == 2 && s_current_loaded_target == 0) {
         should_draw_bg = true;
       }
-      // biz_bg_mode == 0: Solid color stealth (should_draw_bg = false)
+      // biz_bg_mode == 0 (Solid Black), biz_bg_mode == 1 (Solid White): should_draw_bg = false
     }
   }
 
