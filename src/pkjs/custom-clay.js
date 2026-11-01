@@ -207,17 +207,18 @@ module.exports = function(minified) {
 
       // スライダー誤タップ防止アコーディオン（折りたたみ）
       var fineTuneDetails = document.createElement('details');
-      fineTuneDetails.style.margin = '10px 0';
-      fineTuneDetails.style.padding = '8px 12px';
-      fineTuneDetails.style.background = '#f9f9f9';
-      fineTuneDetails.style.borderRadius = '6px';
-      fineTuneDetails.style.border = '1px solid #e0e0e0';
+      fineTuneDetails.style.margin = '12px 0';
+      fineTuneDetails.style.padding = '10px 14px';
+      fineTuneDetails.style.background = 'rgba(128, 128, 128, 0.12)';
+      fineTuneDetails.style.borderRadius = '8px';
+      fineTuneDetails.style.border = '1px solid rgba(128, 128, 128, 0.25)';
+      fineTuneDetails.style.color = 'inherit';
 
       var fineTuneSummary = document.createElement('summary');
       fineTuneSummary.style.cursor = 'pointer';
       fineTuneSummary.style.fontWeight = 'bold';
-      fineTuneSummary.style.fontSize = '12px';
-      fineTuneSummary.style.color = '#333';
+      fineTuneSummary.style.fontSize = '13px';
+      fineTuneSummary.style.color = 'inherit';
       fineTuneSummary.style.outline = 'none';
       fineTuneSummary.innerText = '⚙️ Fine Tune Controls (Zoom & Brightness) ▼';
       fineTuneDetails.appendChild(fineTuneSummary);
