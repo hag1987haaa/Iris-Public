@@ -39,6 +39,7 @@ static Window *s_main_window;
 static Layer *s_canvas_layer;
 static char s_time_chars[4][2]; 
 static char s_date_str[16];
+static int32_t s_min_angle = 0, s_hour_angle = 0;
 static GFont s_time_font = NULL, s_info_font;
 
 static int s_unobstructed_y_offset = 0; 
@@ -864,6 +865,9 @@ static void update_info(void) {
   s_time_chars[2][0] = s_m[0]; s_time_chars[2][1] = '\0';
   s_time_chars[3][0] = s_m[1]; s_time_chars[3][1] = '\0';
 
+  s_min_angle = TRIG_MAX_ANGLE * tick->tm_min / 60;
+  s_hour_angle = TRIG_MAX_ANGLE * (((tick->tm_hour % 12) * 60) + tick->tm_min) / 720;
+
   strftime(s_d, sizeof(s_d), "%a. %b %d", tick);
   for (int i=0; s_d[i]; i++) if(s_d[i]>='a' && s_d[i]<='z') s_d[i] -= 32;
   strncpy(s_date_str, s_d, sizeof(s_date_str));
@@ -1094,10 +1098,8 @@ static void update_proc(Layer *layer, GContext *ctx) {
     }
   }
 
-  time_t temp = time(NULL);
-  struct tm *t = localtime(&temp);
-  int32_t min_angle = TRIG_MAX_ANGLE * t->tm_min / 60;
-  int32_t hour_angle = TRIG_MAX_ANGLE * (((t->tm_hour % 12) * 60) + t->tm_min) / 720;
+  int32_t min_angle = s_min_angle;
+  int32_t hour_angle = s_hour_angle;
 
   // --- 奥のコンテンツ描画（文字・針） ---
   // ブレード（シャッター羽）の手前に描画しておくことで、ブレードが最前面として被さりながら閉じる
