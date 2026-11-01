@@ -334,15 +334,8 @@ module.exports = [
         "capabilities": ["COLOR"],
         "options": [
           { "label": "Solid Color (Stealth)", "value": "0" },
-          { "label": "Same as Normal Background", "value": "1" },
-          { "label": "Custom Business Image", "value": "2" }
+          { "label": "Same as Normal Background", "value": "1" }
         ]
-      },
-      {
-        "type": "text",
-        "id": "bg_biz_container",
-        "capabilities": ["COLOR"],
-        "defaultValue": "<div id='bg_biz_container'></div>"
       },
       {
         "type": "select",

@@ -250,7 +250,7 @@ module.exports = function(minified) {
 
         var cx = targetW / 2;
         var cy = targetH / 2;
-        var radius = Math.min(targetW, targetH) * 0.42;
+        var radius = Math.min(targetW, targetH) * 0.50;
 
         oCtx.save();
         oCtx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
@@ -532,7 +532,6 @@ module.exports = function(minified) {
     // ページの構築完了（AFTER_BUILD）を待ってからDOMを生成・注入！
     clayConfig.on(clayConfig.EVENTS.AFTER_BUILD, function() {
       initCropper('bg_normal_container', 'Normal Background Image');
-      initCropper('bg_biz_container', 'Business Background Image');
 
       // 通常背景スタイルの連動（Custom Photo 選択時のみ画像アップローダーを表示）
       var themeSelect = clayConfig.getItemByMessageKey && clayConfig.getItemByMessageKey('Theme');
@@ -549,19 +548,6 @@ module.exports = function(minified) {
         updateNormalVisibility();
       }
 
-      // ビジネス背景スタイルの連動
-      var bizBgSelect = clayConfig.getItemByMessageKey && clayConfig.getItemByMessageKey('BizBgMode');
-      if (bizBgSelect) {
-        var bizBox = document.getElementById('bg_biz_container');
-        function updateBizVisibility() {
-          if (!bizBox) return;
-          var val = bizBgSelect.get();
-          bizBox.style.display = (val === '2' || val === 2) ? 'block' : 'none';
-        }
-        bizBgSelect.on('change', updateBizVisibility);
-        updateBizVisibility();
-      }
-
       // フォーム送信（submit）をキャプチャして画像とドラフトデータを確実に含めて送信！
       var mainForm = document.getElementById('main-form');
       if (mainForm) {
@@ -571,7 +557,6 @@ module.exports = function(minified) {
 
           var res = clayConfig.serialize();
           var norm = document.getElementById('bg_normal_container');
-          var biz = document.getElementById('bg_biz_container');
 
           if (norm && norm.getImgData) {
             var d = norm.getImgData();
@@ -581,24 +566,11 @@ module.exports = function(minified) {
             res.iris_bg_normal_draft = norm.getDraftData();
           }
 
-          if (biz && biz.getImgData) {
-            var bd = biz.getImgData();
-            if (bd) res.iris_bg_biz = bd;
-          }
-          if (biz && biz.getDraftData) {
-            res.iris_bg_biz_draft = biz.getDraftData();
-          }
-
           try {
             if (res.iris_bg_normal_draft) {
               localStorage.setItem('iris_bg_normal_draft', JSON.stringify(res.iris_bg_normal_draft));
             } else if (norm && norm.isCleared && norm.isCleared()) {
               localStorage.removeItem('iris_bg_normal_draft');
-            }
-            if (res.iris_bg_biz_draft) {
-              localStorage.setItem('iris_bg_biz_draft', JSON.stringify(res.iris_bg_biz_draft));
-            } else if (biz && biz.isCleared && biz.isCleared()) {
-              localStorage.removeItem('iris_bg_biz_draft');
             }
           } catch (storageErr) {}
 

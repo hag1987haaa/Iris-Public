@@ -120,9 +120,8 @@ static void sanitize_settings(ClaySettings *s) {
 #if defined(PBL_COLOR)
 #define PERSIST_KEY_BG_META 199
 #define PERSIST_KEY_BG_CACHE_BASE 200
-#define BG_CACHE_MAX_KEYS 14
+#define BG_CACHE_MAX_KEYS 24
 #define BG_CACHE_CHUNK_SIZE 256
-#define BG_CACHE_RADIUS_SQ 2209 // 半径47 (フル解像度で直径188pxの丸窓アパーチャ領域をカバー)
 #define BG_CACHE_MAGIC 0x4952   // "IR" 高密度4bitキャッシュ形式マーカー
 
 typedef struct {
@@ -197,19 +196,13 @@ static void save_bg_cache_to_persist(int width, int height) {
 
   uint16_t cw = width / 2;
   uint16_t ch = height / 2;
-  int cx_center = cw / 2;
-  int cy_center = ch / 2;
 
-  // 1. 丸窓領域内の64色ヒストグラムを集計
+  // 1. 全画面の64色ヒストグラムを集計
   uint16_t hist[64];
   memset(hist, 0, sizeof(hist));
   for (int cy = 0; cy < (int)ch; cy++) {
-    int dy = cy - cy_center;
     for (int cx = 0; cx < (int)cw; cx++) {
-      int dx = cx - cx_center;
-      if (dx * dx + dy * dy <= BG_CACHE_RADIUS_SQ) {
-        hist[get_block_avg_color6(src, width, height, cx * 2, cy * 2)]++;
-      }
+      hist[get_block_avg_color6(src, width, height, cx * 2, cy * 2)]++;
     }
   }
 
@@ -270,11 +263,7 @@ static void save_bg_cache_to_persist(int width, int height) {
   uint8_t cur_byte = 0;
 
   for (int cy = 0; cy < (int)ch; cy++) {
-    int dy = cy - cy_center;
     for (int cx = 0; cx < (int)cw; cx++) {
-      int dx = cx - cx_center;
-      if (dx * dx + dy * dy > BG_CACHE_RADIUS_SQ) continue;
-
       uint8_t p_idx = lut[get_block_avg_color6(src, width, height, cx * 2, cy * 2)] & 0x0F;
       if (high_nibble) {
         cur_byte = (uint8_t)(p_idx << 4);
@@ -340,16 +329,9 @@ static bool load_bg_cache_from_persist(void) {
   bool high_nibble = true;
   uint8_t cur_byte = 0;
 
-  int cx_center = cw / 2;
-  int cy_center = ch / 2;
-
-  // パス1: 4bitパレットデータを展開して2x2ブロック基準点を配置
+  // パス1: 4bitパレットデータを展開して2x2ブロック基準点を配置（全画面完全カバー）
   for (int cy = 0; cy < (int)ch; cy++) {
-    int dy_c = cy - cy_center;
     for (int cx = 0; cx < (int)cw; cx++) {
-      int dx_c = cx - cx_center;
-      if (dx_c * dx_c + dy_c * dy_c > BG_CACHE_RADIUS_SQ) continue;
-
       uint8_t p_idx;
       if (high_nibble) {
         if (chunk_offset >= BG_CACHE_CHUNK_SIZE) {
@@ -382,12 +364,9 @@ static bool load_bg_cache_from_persist(void) {
 
   // パス2: サブピクセル・バイリニア＋ディザ補間で2x2ブロック境界のモザイク感を完全平滑化
   for (int cy = 0; cy < (int)ch - 1; cy++) {
-    int dy_c = cy - cy_center;
     int by = cy * 2;
     if (by + 1 >= (int)height) continue;
     for (int cx = 0; cx < (int)cw - 1; cx++) {
-      int dx_c = cx - cx_center;
-      if (dx_c * dx_c + dy_c * dy_c > BG_CACHE_RADIUS_SQ) continue;
       int bx = cx * 2;
       if (bx + 1 >= (int)width) continue;
 
@@ -455,41 +434,32 @@ static void request_bg_image_from_phone(int target) {
 }
 
 static void check_and_request_missing_bg(void) {
-  int needed_target = -1;
   if (!s_active_biz_mode) {
-    if (s_settings.theme == 2) {
-      needed_target = 0;
-    } else {
+    if (s_settings.theme != 2) {
       return; // Theme == 0 (Solid White) / 1 (Solid Black): 写真は要求しない
     }
-  } else if (s_settings.biz_bg_mode == 1) {
-    needed_target = 0;
-  } else if (s_settings.biz_bg_mode == 2) {
-    needed_target = 1;
-  } else {
-    // biz_bg_mode == 0 (Solid Color Stealth): 画像は要求しない。通常画像がRAMにあればそのまま温存！
+  } else if (s_settings.biz_bg_mode != 1) {
+    // biz_bg_mode == 0 (Solid Color Stealth): 写真は要求しない。通常画像がRAMにあればそのまま温存！
     return;
   }
 
-  // すでに目的のフル解像度画像がロード済みなら何もしない
-  if (s_bg_bitmap != NULL && s_is_rx_complete && s_is_full_res_loaded && s_current_loaded_target == needed_target) {
+  // すでに目的の画像（target 0）がロード済みなら何もしない（RAM温存で100%鮮明画像を継続！）
+  if (s_bg_bitmap != NULL && s_is_rx_complete && s_current_loaded_target == 0) {
     return;
   }
 
-  // ビジネス専用画像(target 1)から通常画像(target 0)へ戻った場合など、まず時計内キャッシュから0.01秒で即座に復元！
-  if (needed_target == 0 && (s_bg_bitmap == NULL || s_current_loaded_target != 0 || !s_is_rx_complete)) {
+  // 時計内キャッシュ（全画面カバー）から0.01秒で即座に復元
+  if (s_bg_bitmap == NULL || !s_is_rx_complete) {
     load_bg_cache_from_persist();
   }
 
   if (!s_image_rx_bytes) {
-    if (s_bg_bitmap != NULL && s_is_rx_complete && s_current_loaded_target == needed_target) {
-      // キャッシュ画像が表示中の場合は、起動時のシャッター変形アニメ(約550ms)が完全に終わってから
-      // 裏でBluetooth転送を開始することで、2枚目のBitmap(45.6KB)を使わずに画面のチラつき・飛びをゼロにする！
-      s_pending_req_target = needed_target;
+    if (s_bg_bitmap != NULL && s_is_rx_complete) {
+      s_pending_req_target = 0;
       if (s_bg_req_retry_timer) app_timer_cancel(s_bg_req_retry_timer);
       s_bg_req_retry_timer = app_timer_register(600, bg_req_retry_cb, NULL);
     } else {
-      request_bg_image_from_phone(needed_target);
+      request_bg_image_from_phone(0);
     }
   }
 }

@@ -125,19 +125,15 @@ Pebble.addEventListener('showConfiguration', function() {
   clay.meta.watchToken = Pebble.getWatchToken();
 
   var normalDraft = null;
-  var bizDraft = null;
   try {
     var nd = localStorage.getItem('iris_bg_normal_draft');
     if (nd) normalDraft = JSON.parse(nd);
-    var bd = localStorage.getItem('iris_bg_biz_draft');
-    if (bd) bizDraft = JSON.parse(bd);
   } catch (err) {
     console.log('Error reading drafts from localStorage:', err);
   }
 
   clay.meta.userData = {
-    normalDraft: normalDraft,
-    bizDraft: bizDraft
+    normalDraft: normalDraft
   };
 
   Pebble.openURL(clay.generateUrl());
@@ -156,14 +152,12 @@ Pebble.addEventListener('webviewclosed', function(e) {
   }
 
   var normalImg = null;
-  var bizImg = null;
 
   if (rawSettings.iris_bg_normal) {
     normalImg = rawSettings.iris_bg_normal.value || rawSettings.iris_bg_normal;
     delete rawSettings.iris_bg_normal;
   }
   if (rawSettings.iris_bg_biz) {
-    bizImg = rawSettings.iris_bg_biz.value || rawSettings.iris_bg_biz;
     delete rawSettings.iris_bg_biz;
   }
 
@@ -177,11 +171,6 @@ Pebble.addEventListener('webviewclosed', function(e) {
     delete rawSettings.iris_bg_normal_draft;
   }
   if (rawSettings.iris_bg_biz_draft !== undefined) {
-    if (rawSettings.iris_bg_biz_draft === null) {
-      localStorage.removeItem('iris_bg_biz_draft');
-    } else {
-      localStorage.setItem('iris_bg_biz_draft', JSON.stringify(rawSettings.iris_bg_biz_draft));
-    }
     delete rawSettings.iris_bg_biz_draft;
   }
 
@@ -199,22 +188,6 @@ Pebble.addEventListener('webviewclosed', function(e) {
         w: normalImg.w,
         h: normalImg.h,
         byteArray: base64ToBytes(normalImg.b64)
-      });
-    }
-  }
-
-  if (bizImg) {
-    if (bizImg.clear) {
-      localStorage.removeItem('iris_bg_biz_raw');
-      jobs.push({ action: 'clear', target: 1 });
-    } else if (bizImg.b64) {
-      localStorage.setItem('iris_bg_biz_raw', JSON.stringify(bizImg));
-      jobs.push({
-        action: 'send',
-        target: 1,
-        w: bizImg.w,
-        h: bizImg.h,
-        byteArray: base64ToBytes(bizImg.b64)
       });
     }
   }
