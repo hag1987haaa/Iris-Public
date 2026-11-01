@@ -303,15 +303,35 @@ module.exports = [
       },
       {
         "type": "select",
-        "messageKey": "BizTheme",
-        "label": "Theme (Bg / Blades)",
-        "description": "Selecting your style of Background and Blades",
+        "messageKey": "BizBgMode",
+        "label": "Background Style",
+        "defaultValue": "0",
+        "capabilities": ["COLOR"],
+        "options": [
+          { "label": "Solid Black", "value": "0" },
+          { "label": "Solid White", "value": "1" },
+          { "label": "Same as Normal Background", "value": "2" }
+        ]
+      },
+      {
+        "type": "select",
+        "messageKey": "BizBgMode",
+        "label": "Background Style",
+        "defaultValue": "0",
+        "capabilities": ["BW"],
+        "options": [
+          { "label": "Solid Black", "value": "0" },
+          { "label": "Solid White", "value": "1" }
+        ]
+      },
+      {
+        "type": "select",
+        "messageKey": "BizBladeColor",
+        "label": "Blade Color Style",
         "defaultValue": "0",
         "options": [
-          { "label": "Black / Black", "value": "0" },
-          { "label": "Black / White", "value": "1" },
-          { "label": "White / White", "value": "2" },
-          { "label": "White / Black", "value": "3" }
+          { "label": "Solid Black", "value": "0" },
+          { "label": "Solid White", "value": "1" }
         ]
       },
       {
@@ -323,18 +343,6 @@ module.exports = [
           { "label": "Auto (Invert Background)", "value": "0" },
           { "label": "Black", "value": "1" },
           { "label": "White", "value": "2" }
-        ]
-      },
-      {
-        "type": "select",
-        "messageKey": "BizBgMode",
-        "label": "Business Background Style",
-        "description": "Choose background style during business hours.",
-        "defaultValue": "0",
-        "capabilities": ["COLOR"],
-        "options": [
-          { "label": "Solid Color (Stealth)", "value": "0" },
-          { "label": "Same as Normal Background", "value": "1" }
         ]
       },
       {

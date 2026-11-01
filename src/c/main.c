@@ -5,7 +5,7 @@
 #define PERSIST_KEY_SETTINGS 1
 #define PERSIST_KEY_ACTIVE_BIZ 2
 #define PERSIST_KEY_SETTINGS_VERSION 100
-#define CURRENT_SETTINGS_VERSION 6
+#define CURRENT_SETTINGS_VERSION 7
 
 typedef enum { WeatherClear, WeatherCloudy, WeatherRainy, WeatherSnowy, WeatherThunder } WeatherStatus;
 
@@ -17,9 +17,10 @@ typedef struct {
   int biz_face; int biz_theme; int biz_shutter; int chime_interval;
   int biz_days; int biz_chime_interval; int biz_vibe_mode;
   int text_style;  // 0: Flat, 1: Drop Shadow, 2: Outline
-  int biz_bg_mode; // 0: None (Solid), 1: Same as Normal, 2: Biz Image
+  int biz_bg_mode; // 0: Solid Black, 1: Solid White, 2: Same as Normal Background
   int text_color;  // 0: Auto (Invert Bg), 1: Black, 2: White
   int biz_text_color; // 0: Auto (Invert Bg), 1: Black, 2: White
+  int biz_blade_color; // 0: Solid Black, 1: Solid White
 } ClaySettings;
 
 static ClaySettings s_settings;
@@ -81,9 +82,10 @@ static void get_default_settings(ClaySettings *settings) {
     .biz_chime_interval = 60, // Every 1 Hour
     .biz_vibe_mode = 1,       // Periodic Only
     .text_style = 0,          // Flat
-    .biz_bg_mode = 0,         // None (Solid)
+    .biz_bg_mode = 0,         // Solid Black
     .text_color = 0,          // Auto (Invert Bg)
-    .biz_text_color = 0       // Auto (Invert Bg)
+    .biz_text_color = 0,      // Auto (Invert Bg)
+    .biz_blade_color = 0      // Solid Black
   };
 }
 
@@ -115,6 +117,7 @@ static void sanitize_settings(ClaySettings *s) {
   if (s->biz_bg_mode < 0 || s->biz_bg_mode > 2) s->biz_bg_mode = 0;
   if (s->text_color < 0 || s->text_color > 2) s->text_color = 0;
   if (s->biz_text_color < 0 || s->biz_text_color > 2) s->biz_text_color = 0;
+  if (s->biz_blade_color < 0 || s->biz_blade_color > 1) s->biz_blade_color = 0;
 }
 
 #if defined(PBL_COLOR)
@@ -438,9 +441,11 @@ static void check_and_request_missing_bg(void) {
     if (s_settings.theme != 2) {
       return; // Theme == 0 (Solid White) / 1 (Solid Black): 写真は要求しない
     }
-  } else if (s_settings.biz_bg_mode != 1) {
-    // biz_bg_mode == 0 (Solid Color Stealth): 写真は要求しない。通常画像がRAMにあればそのまま温存！
-    return;
+  } else {
+    if (s_settings.biz_bg_mode != 2 || s_settings.theme != 2) {
+      // biz_bg_mode != 2: 写真は要求しない。通常画像がRAMにあればそのまま温存！
+      return;
+    }
   }
 
   // すでに目的の画像（target 0）がロード済みなら何もしない（RAM温存で100%鮮明画像を継続！）
@@ -487,8 +492,13 @@ static void draw_text_styled(GContext *ctx, const char *text, GFont font, GRect 
 static void apply_theme_colors() {
   GColor bg;
   if (s_active_biz_mode) {
-    // ビジネスモード時の背景色強制上書き
-    bg = (s_settings.biz_theme == 0 || s_settings.biz_theme == 1) ? GColorBlack : GColorWhite;
+    if (s_settings.biz_bg_mode == 2) {
+      // Same as Normal Background
+      bg = (s_settings.theme == 0) ? GColorWhite : GColorBlack;
+    } else {
+      // 0: Solid Black, 1: Solid White
+      bg = (s_settings.biz_bg_mode == 0) ? GColorBlack : GColorWhite;
+    }
   } else {
     // 通常時の背景色（Theme 0: White, Theme 1: Black, Theme 2: Custom Photo -> 透過下地は黒）
     bg = (s_settings.theme == 0) ? GColorWhite : GColorBlack;
@@ -582,6 +592,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
       dict_write_int32(out_iter, MESSAGE_KEY_BizVibeMode, s_settings.biz_vibe_mode);
       dict_write_int32(out_iter, MESSAGE_KEY_TextStyle, s_settings.text_style);
       dict_write_int32(out_iter, MESSAGE_KEY_BizBgMode, s_settings.biz_bg_mode);
+      dict_write_int32(out_iter, MESSAGE_KEY_BizBladeColor, s_settings.biz_blade_color);
       dict_write_int32(out_iter, MESSAGE_KEY_TextColor, s_settings.text_color);
       dict_write_int32(out_iter, MESSAGE_KEY_BizTextColor, s_settings.biz_text_color);
 
@@ -722,6 +733,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   if((t=dict_find(iter, MESSAGE_KEY_BizVibeMode))) s_pending_settings.biz_vibe_mode = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_TextStyle))) s_pending_settings.text_style = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_BizBgMode))) s_pending_settings.biz_bg_mode = get_dict_int(t);
+  if((t=dict_find(iter, MESSAGE_KEY_BizBladeColor))) s_pending_settings.biz_blade_color = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_TextColor))) s_pending_settings.text_color = get_dict_int(t);
   if((t=dict_find(iter, MESSAGE_KEY_BizTextColor))) s_pending_settings.biz_text_color = get_dict_int(t);
   
@@ -1046,8 +1058,14 @@ static void update_proc(Layer *layer, GContext *ctx) {
     } else if (s_settings.biz_text_color == 2) {
       txt_color = GColorWhite;
     } else {
-      // 0: Auto (テーマ0,1は黒背景->白文字、テーマ2,3は白背景->黒文字)
-      txt_color = (s_settings.biz_theme <= 1) ? GColorWhite : GColorBlack;
+      // 0: Auto (背景色に応じて反転)
+      if (s_settings.biz_bg_mode == 0) {
+        txt_color = GColorWhite; // 黒背景 -> 白文字
+      } else if (s_settings.biz_bg_mode == 1) {
+        txt_color = GColorBlack; // 白背景 -> 黒文字
+      } else {
+        txt_color = (s_settings.theme == 0) ? GColorBlack : GColorWhite;
+      }
     }
   } else {
     if (s_settings.text_color == 1) {
@@ -1166,7 +1184,7 @@ static void update_proc(Layer *layer, GContext *ctx) {
   // --- 【最前面】シャッター羽（ブレード）の描画 ---
   BladeRenderConfig blade_render_cfg = {
     .is_biz_mode = s_active_biz_mode,
-    .biz_theme = s_settings.biz_theme,
+    .biz_blade_color = s_settings.biz_blade_color,
     .theme = s_settings.theme,
     .shutter_color_mode = s_settings.shutter_color_mode,
     .custom_color = s_settings.custom_shutter_color,

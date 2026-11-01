@@ -47,12 +47,7 @@ static GPoint get_ray_far_point(int i, int r, int32_t angle, GPoint center) {
 static GColor get_wing_fill_color(int wing_index, const BladeRenderConfig *cfg) {
   // ビジネスモード用の羽の色強制上書き
   if (cfg->is_biz_mode) {
-    switch (cfg->biz_theme) {
-      case 0: return GColorBlack; // 黒背景 / 黒羽
-      case 1: return GColorWhite; // 黒背景 / 白羽 (全部真っ白！)
-      case 2: return GColorWhite; // 白背景 / 白羽
-      case 3: return GColorBlack; // 白背景 / 黒羽 (全部真っ黒！)
-    }
+    return (cfg->biz_blade_color == 1) ? GColorWhite : GColorBlack;
   }
 
   int pct = cfg->battery_pct;

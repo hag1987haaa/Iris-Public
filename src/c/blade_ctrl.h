@@ -17,7 +17,7 @@ typedef struct {
 // ブレードの描画用パラメータ
 typedef struct {
   bool is_biz_mode;        // ビジネスモード表示中か
-  int biz_theme;           // 0: 黒/黒, 1: 黒/白, 2: 白/白, 3: 白/黒
+  int biz_blade_color;     // 0: Solid Black, 1: Solid White
   int theme;               // 通常時の背景テーマ (0: White, 1: Black)
   int shutter_color_mode;  // 0..6 (Black, White, Custom, Rainbow, Pastel, Battery Vivid, Battery Pastel)
   GColor custom_color;     // カスタムカラー
