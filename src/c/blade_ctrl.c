@@ -223,10 +223,10 @@ static void focus_handler(bool in_focus) {
       s_callbacks.get_anim_config(&cfg);
     }
 
-    // モード切り替えがある場合、ポップアップが消えたら間髪を容れずスッと変形（150ms）
+    // モード切り替えがある場合、ポップアップ/トースト通知が完全に消えてから綺麗に変形（600ms）
     if (cfg.has_pending_biz) {
       if (s_delayed_shutter_timer) app_timer_cancel(s_delayed_shutter_timer);
-      s_delayed_shutter_timer = app_timer_register(150, delayed_shutter_cb, NULL);
+      s_delayed_shutter_timer = app_timer_register(600, delayed_shutter_cb, NULL);
     }
   }
 }

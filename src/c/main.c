@@ -779,13 +779,10 @@ static void evaluate_context_modes() {
     }
   }
   
-  // モードが変わった瞬間を検知して、マジック変形を発動！
+  // モードが変わった瞬間を検知して、マジック変形フラグをセット！
   if (new_biz != s_active_biz_mode && !s_pending_biz_update) {
     is_biz_mode = new_biz;
     s_pending_biz_update = true;
-    if (!blade_ctrl_is_animating()) {
-      blade_ctrl_trigger(false);
-    }
   }
   
   is_sleep_mode = new_sleep;
