@@ -756,10 +756,15 @@ static void evaluate_context_modes() {
     
     //24時間対応＆日またぎ考慮の判定
     bool in_hours = false;
-    if (s == e) {
-      in_hours = true; // 開始と終了が同じなら24時間いつでも有効！
+    if (s == e || (s == 0 && e == 23)) {
+      in_hours = true; // 開始と終了が同じ、または0〜23なら24時間いつでも有効！
     } else {
-      in_hours = (s < e) ? (h >= s && h < e) : (h >= s || h < e);
+      bool end_is_full_day = (e == 23);
+      if (s < e) {
+        in_hours = (h >= s && (end_is_full_day ? true : h < e));
+      } else {
+        in_hours = (h >= s || (end_is_full_day ? true : h < e));
+      }
     }
     
     if (in_hours) new_biz = true;  // ビジネスモード
@@ -781,10 +786,13 @@ static void evaluate_context_modes() {
     }
   }
   
-  // モードが変わった瞬間を検知して、マジック変形のフラグを立てる！
+  // モードが変わった瞬間を検知して、マジック変形を発動！
   if (new_biz != s_active_biz_mode && !s_pending_biz_update) {
     is_biz_mode = new_biz;
     s_pending_biz_update = true;
+    if (!blade_ctrl_is_animating()) {
+      blade_ctrl_trigger(false);
+    }
   }
   
   is_sleep_mode = new_sleep;

@@ -172,12 +172,23 @@ static void handle_tap(AccelAxisType axis, int32_t direction) {
   // 定期バイブ（インターバルチャイム）のモーター振動ノイズならブロック
   if (s_block_tap_from_vibe) return;
 
+  // 手首を振った瞬間にも最新のコンテキスト（Quiet Time状態など）を再評価！
+  if (s_callbacks.on_focus_gained) {
+    s_callbacks.on_focus_gained();
+  }
+
   BladeAnimConfig cfg = {0};
   if (s_callbacks.get_anim_config) {
     s_callbacks.get_anim_config(&cfg);
   }
 
-  // ビジネスモード中はシェイクを完全に無視！真面目な時計に徹する！
+  // モード切り替え（ビジネス ⇔ 通常）の保留があるなら、シェイクで即シャッター変形！
+  if (cfg.has_pending_biz) {
+    blade_ctrl_trigger(false);
+    return;
+  }
+
+  // ビジネスモード中はシェイクアニメーションを無視（真面目な時計に徹する）
   if (cfg.is_biz_mode) return;
 
   // 画像チャンク受信中などの外部ブロック条件
