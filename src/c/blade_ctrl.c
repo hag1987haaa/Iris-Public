@@ -289,18 +289,15 @@ void blade_ctrl_handle_tick(int tm_min, bool is_chime_time) {
   } else if (!cfg.is_biz_mode) {
     bool should_animate = false;
 
-    // モード0 (Full): anim_freq間隔、またはインターバルチャイム時
-    if (cfg.anim_mode == 0) {
+    // モード0 (Full: Shake & Timer) または モード1 (Interval Timer Only)
+    // どちらも設定されたオートアニメーション間隔(anim_freq分ごと)または時報時に発動！
+    if (cfg.anim_mode == 0 || cfg.anim_mode == 1) {
       if ((cfg.anim_freq > 0 && tm_min % cfg.anim_freq == 0) || is_chime_time) {
         should_animate = true;
       }
     }
-    // モード1 (Interval Only): インターバルタイマー時のみアニメーション
-    else if (cfg.anim_mode == 1 && is_chime_time) {
-      should_animate = true;
-    }
 
-    if (should_animate && s_in_focus) {
+    if (should_animate) {
       blade_ctrl_trigger(false);
     } else if (s_callbacks.on_update_no_anim) {
       s_callbacks.on_update_no_anim();
