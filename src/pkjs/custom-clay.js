@@ -152,7 +152,6 @@ module.exports = function(minified) {
       zoomSlider.value = '100';
       zoomSlider.style.width = '100%';
       zoomRow.appendChild(zoomSlider);
-      box.appendChild(zoomRow);
 
       // コントロール行: 明るさスライダー
       var brightRow = document.createElement('div');
@@ -171,7 +170,6 @@ module.exports = function(minified) {
       brightSlider.value = '0';
       brightSlider.style.width = '100%';
       brightRow.appendChild(brightSlider);
-      box.appendChild(brightRow);
 
       // ガイド表示チェックボックス
       var checkRow = document.createElement('div');
@@ -189,7 +187,6 @@ module.exports = function(minified) {
       guideLabel.innerText = 'Show Watch Face & Aperture Guide Overlay';
       checkRow.appendChild(guideCheck);
       checkRow.appendChild(guideLabel);
-      box.appendChild(checkRow);
 
       // ディザリングトグル
       var ditherRow = document.createElement('div');
@@ -207,7 +204,33 @@ module.exports = function(minified) {
       ditherLabel.innerText = 'Preview 64-Color Floyd-Steinberg Dithering';
       ditherRow.appendChild(ditherCheck);
       ditherRow.appendChild(ditherLabel);
-      box.appendChild(ditherRow);
+
+      // スライダー誤タップ防止アコーディオン（折りたたみ）
+      var fineTuneDetails = document.createElement('details');
+      fineTuneDetails.style.margin = '10px 0';
+      fineTuneDetails.style.padding = '8px 12px';
+      fineTuneDetails.style.background = '#f9f9f9';
+      fineTuneDetails.style.borderRadius = '6px';
+      fineTuneDetails.style.border = '1px solid #e0e0e0';
+
+      var fineTuneSummary = document.createElement('summary');
+      fineTuneSummary.style.cursor = 'pointer';
+      fineTuneSummary.style.fontWeight = 'bold';
+      fineTuneSummary.style.fontSize = '12px';
+      fineTuneSummary.style.color = '#333';
+      fineTuneSummary.style.outline = 'none';
+      fineTuneSummary.innerText = '⚙️ Fine Tune Controls (Zoom & Brightness) ▼';
+      fineTuneDetails.appendChild(fineTuneSummary);
+
+      var fineTuneBody = document.createElement('div');
+      fineTuneBody.style.marginTop = '10px';
+      fineTuneBody.appendChild(zoomRow);
+      fineTuneBody.appendChild(brightRow);
+      fineTuneBody.appendChild(checkRow);
+      fineTuneBody.appendChild(ditherRow);
+
+      fineTuneDetails.appendChild(fineTuneBody);
+      box.appendChild(fineTuneDetails);
 
       // クリアボタン
       var btnRow = document.createElement('div');
