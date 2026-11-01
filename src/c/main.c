@@ -321,6 +321,13 @@ static bool load_bg_cache_from_persist(void) {
   uint16_t ch = meta.cache_h;
   if (width == 0 || height == 0 || cw == 0 || ch == 0) return false;
 
+  if (s_bg_bitmap != NULL) {
+    GSize cur_size = gbitmap_get_bounds(s_bg_bitmap).size;
+    if (cur_size.w != width || cur_size.h != height) {
+      gbitmap_destroy(s_bg_bitmap);
+      s_bg_bitmap = NULL;
+    }
+  }
   if (s_bg_bitmap == NULL) {
     s_bg_bitmap = gbitmap_create_blank(GSize(width, height), GBitmapFormat8Bit);
   }
