@@ -165,7 +165,7 @@ module.exports = [
         "messageKey": "AnimMode",
         "label": "Animation Mode",
         "description": "Choose when aperture animation plays.",
-        "defaultValue": "0",
+        "defaultValue": "1",
         "options": [
           { "label": "Full (Shake & Timer)", "value": "0" },
           { "label": "Interval Timer Only", "value": "1" },
@@ -178,7 +178,7 @@ module.exports = [
         "messageKey": "AnimFreq",
         "label": "Auto-Animation Interval",
         "description": "How often the aperture animation plays automatically.",
-        "defaultValue": "1",
+        "defaultValue": "30",
         "options": [
           { "label": "Every 1 Minute", "value": "1" },
           { "label": "Every 5 Minutes", "value": "5" },
@@ -212,7 +212,7 @@ module.exports = [
         "messageKey": "VibeMode",
         "label": "Vibration Mode",
         "description": "Choose vibration feedback. Pauses automatically during Sleep Mode / Quiet Time outside business hours.",
-        "defaultValue": "2",
+        "defaultValue": "3",
         "options": [
           { "label": "Shake & Periodic Vibration", "value": "0" },
           { "label": "Periodic Vibration Only", "value": "1" },

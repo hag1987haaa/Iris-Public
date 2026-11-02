@@ -5,7 +5,7 @@
 #define PERSIST_KEY_SETTINGS 1
 #define PERSIST_KEY_ACTIVE_BIZ 2
 #define PERSIST_KEY_SETTINGS_VERSION 100
-#define CURRENT_SETTINGS_VERSION 7
+#define CURRENT_SETTINGS_VERSION 8
 
 typedef enum { WeatherClear, WeatherCloudy, WeatherRainy, WeatherSnowy, WeatherThunder } WeatherStatus;
 
@@ -63,9 +63,9 @@ static void get_default_settings(ClaySettings *settings) {
     .watchface_mode = 0,      // Digital
     .theme = 0,               // White
     .anim_speed = 40,         // 400ms
-    .anim_freq = 1,           // 1 min
-    .anim_mode = 0,           // Full
-    .vibe_mode = 2,           // Shake Only
+    .anim_freq = 30,          // 30 min (Battery Friendly)
+    .anim_mode = 1,           // Interval Timer Only
+    .vibe_mode = 3,           // Disabled (Off)
     .shutter_thick = 1,       // Medium
     .battery_color_sync = true,
     .shutter_color_mode = PBL_IF_COLOR_ELSE(4, 0), // Pastel Rainbow (Color) / Solid Black (BW)
@@ -94,9 +94,9 @@ static void sanitize_settings(ClaySettings *s) {
   if (s->watchface_mode < 0 || s->watchface_mode > 1) s->watchface_mode = 0;
   if (s->theme < 0 || s->theme > 2) s->theme = 0;
   if (s->anim_speed < 10 || s->anim_speed > 100) s->anim_speed = 40;
-  if (s->anim_freq < 0 || s->anim_freq > 60) s->anim_freq = 1;
-  if (s->anim_mode < 0 || s->anim_mode > 3) s->anim_mode = 0;
-  if (s->vibe_mode < 0 || s->vibe_mode > 3) s->vibe_mode = 2;
+  if (s->anim_freq < 0 || s->anim_freq > 60) s->anim_freq = 30;
+  if (s->anim_mode < 0 || s->anim_mode > 3) s->anim_mode = 1;
+  if (s->vibe_mode < 0 || s->vibe_mode > 3) s->vibe_mode = 3;
   if (s->shutter_thick < 0 || s->shutter_thick > 2) s->shutter_thick = 1;
 
   #if defined(PBL_COLOR)
